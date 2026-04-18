@@ -27,9 +27,18 @@ if 'data_loaded' not in st.session_state:
 if 'analysis_done' not in st.session_state:
     st.session_state.analysis_done = False
 
-# Sidebar
+# Sidebar with student and supervisor info
 with st.sidebar:
     st.header("⚙️ Settings")
+    
+    # معلومات الباحث والمشرف
+    st.markdown("---")
+    st.markdown("**👩‍🎓 Mariam Muhsen Hussein**")
+    st.markdown("*Master student – Advanced Manufacturing System Engineering*")
+    st.markdown("🏛️ University of Baghdad – Al Khwarizmi Engineering College")
+    st.markdown("👨‍🏫 Supervisor: Dr. Osamah Fadhil Abdulateef")
+    st.markdown("---")
+    
     test_type = st.selectbox(
         "Select Statistical Test:",
         ["ANOVA (F-test) - RBD",
@@ -87,7 +96,6 @@ def load_rbd():
             submitted = st.form_submit_button("✅ Save Data")
             if submitted:
                 Y = np.array(data_input, dtype=float)
-                # Convert to long format
                 rows = []
                 for i, tr in enumerate(treat_names):
                     for j, bl in enumerate(block_names):
@@ -287,11 +295,10 @@ if st.button("🔬 Run Analysis", type="primary"):
     if test_type == "ANOVA (F-test) - RBD":
         df = st.session_state.rbd_df
         model = ols('Response ~ C(Treatment) + C(Block)', data=df).fit()
-        anova = sm.stats.anova_lm(model, typ=3)  # Type III for unbalanced data
+        anova = sm.stats.anova_lm(model, typ=3)
         st.markdown("---")
         st.header("📈 ANOVA Results (RBD)")
         st.dataframe(anova.round(4), use_container_width=True)
-        # Means
         treat_means = df.groupby('Treatment')['Response'].mean().round(3)
         block_means = df.groupby('Block')['Response'].mean().round(3)
         col1, col2 = st.columns(2)
@@ -301,7 +308,6 @@ if st.button("🔬 Run Analysis", type="primary"):
         with col2:
             st.write("**Block Means**")
             st.dataframe(pd.DataFrame(block_means))
-        # Plot
         fig, ax = plt.subplots(1,2,figsize=(12,4))
         treat_means.plot(kind='bar', ax=ax[0], color='skyblue')
         ax[0].set_title('Treatment Means')
@@ -351,15 +357,13 @@ if st.button("🔬 Run Analysis", type="primary"):
 
     elif test_type == "Two-Way Factorial ANOVA with Blocking":
         df = st.session_state.factorial_df
-        # Model with main effects and interaction
         model = ols('Response ~ C(FactorA) + C(FactorB) + C(Block) + C(FactorA):C(FactorB)', data=df).fit()
-        anova = sm.stats.anova_lm(model, typ=3)  # Type III
+        anova = sm.stats.anova_lm(model, typ=3)
         st.markdown("---")
         st.header("📈 Two-Way Factorial ANOVA with Blocking")
         st.subheader("ANOVA Table (Type III Sum of Squares)")
         st.dataframe(anova.round(4), use_container_width=True)
 
-        # Marginal means
         col1, col2 = st.columns(2)
         with col1:
             st.write("**Factor A Means**")
@@ -370,7 +374,6 @@ if st.button("🔬 Run Analysis", type="primary"):
             means_b = df.groupby('FactorB')['Response'].mean().round(3)
             st.dataframe(pd.DataFrame(means_b))
 
-        # Interaction plot
         st.subheader("Interaction Plot")
         fig, ax = plt.subplots()
         sns.pointplot(data=df, x='FactorA', y='Response', hue='FactorB', dodge=True,
@@ -379,7 +382,6 @@ if st.button("🔬 Run Analysis", type="primary"):
         ax.grid(True, linestyle='--', alpha=0.6)
         st.pyplot(fig)
 
-        # Tukey HSD for main effects if levels > 2
         if len(df['FactorA'].unique()) > 2:
             with st.expander("Tukey HSD for Factor A"):
                 tukey_a = pairwise_tukeyhsd(df['Response'], df['FactorA'], alpha=alpha)
