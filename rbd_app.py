@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
+import statsmodels.api as sm
 from statsmodels.formula.api import ols
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
@@ -287,8 +288,7 @@ def load_factorial():
             st.write("Data preview (original column names):")
             st.dataframe(df.head())
 
-            # تعيين الأعمدة الأصلية إلى الأسماء القياسية (original -> new)
-            # نبني قاموساً يكون مفتاحه الاسم الأصلي وقيمته الاسم الجديد
+            # Flexible column mapping
             rename_dict = {}
             # Block
             if 'Block' in df.columns:
@@ -321,7 +321,6 @@ def load_factorial():
             elif 'response' in df.columns:
                 rename_dict['response'] = 'Response'
 
-            # التحقق من وجود الأعمدة الأربعة المطلوبة بعد إعادة التسمية
             df_renamed = df.rename(columns=rename_dict)
             required = ['Block', 'FactorA', 'FactorB', 'Response']
             missing = [col for col in required if col not in df_renamed.columns]
@@ -334,7 +333,7 @@ def load_factorial():
                     st.session_state.data_loaded = True
                     st.rerun()
             else:
-                st.error(f"Could not find required columns after mapping. Missing: {missing}. Found columns: {list(df_renamed.columns)}. Please ensure your file contains appropriate column names.")
+                st.error(f"Could not find required columns after mapping. Missing: {missing}. Found: {list(df_renamed.columns)}")
         return None
 
 # --------------------------------------------------------------
@@ -423,7 +422,18 @@ if st.button("🔬 Run Analysis", type="primary"):
         st.pyplot(fig)
 
     elif test_type == "Two-Way Factorial ANOVA with Blocking":
+        # التحقق من وجود البيانات
+        if 'factorial_df' not in st.session_state or st.session_state.factorial_df is None:
+            st.error("No factorial data loaded. Please upload or enter data first.")
+            st.stop()
         df = st.session_state.factorial_df
+        required_cols = ['Block', 'FactorA', 'FactorB', 'Response']
+        if not all(col in df.columns for col in required_cols):
+            st.error(f"Data missing required columns: {required_cols}. Found: {list(df.columns)}")
+            st.stop()
+        # إعادة استيراد للتأكد
+        import statsmodels.api as sm
+        from statsmodels.formula.api import ols
         model = ols('Response ~ C(FactorA) + C(FactorB) + C(Block) + C(FactorA):C(FactorB)', data=df).fit()
         anova = sm.stats.anova_lm(model, typ=3)
         st.markdown("---")
