@@ -2,110 +2,78 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from scipy import stats
+from statsmodels.formula.api import ols
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
-# ================================
-# معلومات المستخدم (حسب طلبك)
-# ================================
-USER_NAME = "Mariam Muhsen Hussein"
-DEGREE = "Master student in Advanced Manufacturing System Engineering"
-UNIVERSITY = "University of Baghdad"
-COLLEGE = "Al Khwarizmi Engineering College"
-SUPERVISOR = "Dr. Osamah Fadhil Abdulateef"
-# ================================
-
-# إعداد الصفحة
 st.set_page_config(page_title="Multi-Test Statistical Analysis Suite", page_icon="📊", layout="wide")
 
-# الثيم الداكن
+# Dark theme
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: white; }
     .stMarkdown, .stText, .stDataFrame { color: white; }
-    .sidebar-info { font-size: 14px; text-align: center; }
 </style>
 """, unsafe_allow_html=True)
 
-# عرض معلومات الباحث في الشريط الجانبي (أعلى)
-with st.sidebar:
-    st.markdown("---")
-    st.markdown(f"**👩‍🎓 {USER_NAME}**")
-    st.markdown(f"*{DEGREE}*")
-    st.markdown(f"🏛️ {UNIVERSITY}")
-    st.markdown(f"📚 {COLLEGE}")
-    st.markdown(f"👨‍🏫 Supervisor: {SUPERVISOR}")
-    st.markdown("---")
-
 st.title("📊 Multi-Test Statistical Analysis Suite")
-st.markdown("### *ANOVA (RBD) | Two‑Sample t‑test | Two‑Sample Z‑test | Tukey HSD Post‑hoc*")
+st.markdown("### *ANOVA (RBD) | t-test | Z-test | Tukey | Factorial ANOVA with Blocking*")
 st.markdown("---")
 
-# تهيئة session_state لحفظ البيانات
+# Session state initialization
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
-if 'Y' not in st.session_state:
-    st.session_state.Y = None
-if 'treatment_names' not in st.session_state:
-    st.session_state.treatment_names = []
-if 'block_names' not in st.session_state:
-    st.session_state.block_names = []
 if 'analysis_done' not in st.session_state:
     st.session_state.analysis_done = False
 
-# الشريط الجانبي (الإعدادات)
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
     test_type = st.selectbox(
         "Select Statistical Test:",
-        ["ANOVA (F-test) - RBD", "Two-Sample t-test", "Two-Sample Z-test", "Tukey HSD (Post-hoc)"],
-        key="test_type"
+        ["ANOVA (F-test) - RBD",
+         "Two-Sample t-test",
+         "Two-Sample Z-test",
+         "Tukey HSD (Post-hoc)",
+         "Two-Way Factorial ANOVA with Blocking"]
     )
-    data_source = st.radio(
-        "Data input method:",
-        ["✏️ Manual entry", "📂 Upload Excel/CSV"],
-        key="data_source"
-    )
-    alpha = st.number_input("Significance level (α)", min_value=0.01, max_value=0.20, value=0.05, step=0.01, key="alpha")
-    
-    # زر مسح البيانات
-    if st.button("🗑️ Clear Data", key="clear_data"):
+    data_source = st.radio("Data input method:", ["✏️ Manual entry", "📂 Upload Excel/CSV"])
+    alpha = st.number_input("Significance level (α)", min_value=0.01, max_value=0.20, value=0.05, step=0.01)
+    if st.button("🗑️ Clear Data"):
+        for key in list(st.session_state.keys()):
+            if key not in ['data_loaded', 'analysis_done']:
+                del st.session_state[key]
         st.session_state.data_loaded = False
-        st.session_state.Y = None
-        st.session_state.analysis_done = False
         st.rerun()
 
-# ================================
-# دوال تحميل البيانات (مع استخدام st.form للإدخال اليدوي)
-# ================================
-def load_data_for_anova():
+# ============================================================
+# Data loading functions (with missing value handling)
+# ============================================================
+
+def load_rbd():
     if data_source == "✏️ Manual entry":
         st.subheader("Manual Data Entry for RBD")
-        
-        with st.form(key="rbd_input_form"):
+        with st.form(key="rbd_form"):
             col1, col2 = st.columns(2)
             with col1:
-                t = st.number_input("Number of treatments", min_value=2, max_value=10, value=3, key="t_form")
+                t = st.number_input("Number of treatments", min_value=2, max_value=10, value=3)
             with col2:
-                b = st.number_input("Number of blocks", min_value=2, max_value=10, value=4, key="b_form")
-            
-            treatment_names = []
+                b = st.number_input("Number of blocks", min_value=2, max_value=10, value=4)
+            treat_names = []
             block_names = []
-            
             st.write("**Treatment names:**")
             cols = st.columns(int(t))
             for i in range(int(t)):
                 with cols[i]:
-                    name = st.text_input(f"Treatment {i+1}", value=f"T{i+1}", key=f"t_name_form_{i}")
-                    treatment_names.append(name)
-            
+                    name = st.text_input(f"Treatment {i+1}", value=f"T{i+1}")
+                    treat_names.append(name)
             st.write("**Block names:**")
             cols = st.columns(int(b))
             for j in range(int(b)):
                 with cols[j]:
-                    name = st.text_input(f"Block {j+1}", value=f"B{j+1}", key=f"b_name_form_{j}")
+                    name = st.text_input(f"Block {j+1}", value=f"B{j+1}")
                     block_names.append(name)
-            
             st.write("**Response values:**")
             data_input = []
             for i in range(int(t)):
@@ -113,97 +81,85 @@ def load_data_for_anova():
                 row = []
                 for j in range(int(b)):
                     with cols[j]:
-                        val = st.number_input(
-                            f"{treatment_names[i]}, {block_names[j]}",
-                            value=10.0,
-                            key=f"cell_form_{i}_{j}",
-                            step=0.1
-                        )
+                        val = st.number_input(f"{treat_names[i]}, {block_names[j]}", value=10.0, key=f"rbd_{i}_{j}", step=0.1)
                         row.append(val)
                 data_input.append(row)
-            
             submitted = st.form_submit_button("✅ Save Data")
-            
             if submitted:
-                st.session_state.Y = np.array(data_input)
-                st.session_state.treatment_names = treatment_names
-                st.session_state.block_names = block_names
+                Y = np.array(data_input, dtype=float)
+                # Convert to long format
+                rows = []
+                for i, tr in enumerate(treat_names):
+                    for j, bl in enumerate(block_names):
+                        rows.append({'Treatment': tr, 'Block': bl, 'Response': Y[i, j]})
+                df = pd.DataFrame(rows)
+                st.session_state.rbd_df = df
                 st.session_state.data_loaded = True
-                st.session_state.analysis_done = False
-                st.success("Data saved successfully! You can now run analysis.")
+                st.success("Data saved!")
                 st.rerun()
-    
-    else:  # Upload file
-        st.subheader("Upload Data File for RBD")
-        uploaded = st.file_uploader("Choose Excel or CSV file", type=['xlsx', 'csv'], key="anova_upload")
+        return st.session_state.get('rbd_df', None)
+    else:
+        st.subheader("Upload RBD Data")
+        st.info("File must have columns: Treatment, Block, Response")
+        uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="rbd_upload")
         if uploaded:
-            if uploaded.name.endswith('.csv'):
-                df = pd.read_csv(uploaded, index_col=0)
+            df = pd.read_csv(uploaded) if uploaded.name.endswith('.csv') else pd.read_excel(uploaded)
+            if all(col in df.columns for col in ['Treatment', 'Block', 'Response']):
+                st.dataframe(df)
+                if st.button("✅ Save Uploaded Data"):
+                    st.session_state.rbd_df = df.dropna()
+                    st.session_state.data_loaded = True
+                    st.rerun()
             else:
-                df = pd.read_excel(uploaded, index_col=0)
-            st.write("Data preview:")
-            st.dataframe(df, use_container_width=True)
-            if st.button("✅ Save Uploaded Data", key="save_upload"):
-                st.session_state.Y = df.values
-                st.session_state.treatment_names = df.index.tolist()
-                st.session_state.block_names = df.columns.tolist()
-                st.session_state.data_loaded = True
-                st.session_state.analysis_done = False
-                st.success("Data saved successfully!")
-                st.rerun()
+                st.error("Missing columns: Treatment, Block, Response")
+        return None
 
-def load_data_for_two_groups():
+def load_two_groups():
     if data_source == "✏️ Manual entry":
         st.subheader("Manual Data Entry for Two Groups")
-        with st.form(key="twogroups_form"):
-            g1_str = st.text_area("Group 1 values (comma separated)", "23,25,28,22,26", key="g1_form")
-            g2_str = st.text_area("Group 2 values (comma separated)", "19,21,24,20,22", key="g2_form")
+        with st.form(key="twog_form"):
+            g1_str = st.text_area("Group 1 values (comma separated)", "23,25,28,22,26")
+            g2_str = st.text_area("Group 2 values (comma separated)", "19,21,24,20,22")
             submitted = st.form_submit_button("✅ Save Data")
             if submitted:
                 try:
                     g1 = np.array([float(x.strip()) for x in g1_str.split(',')])
                     g2 = np.array([float(x.strip()) for x in g2_str.split(',')])
-                    st.session_state.Y = (g1, g2)
-                    st.session_state.treatment_names = ["Group 1", "Group 2"]
+                    st.session_state.twog_df = pd.DataFrame({'Group': ['G1']*len(g1) + ['G2']*len(g2),
+                                                              'Value': np.concatenate([g1, g2])})
                     st.session_state.data_loaded = True
-                    st.session_state.analysis_done = False
-                    st.success("Data saved successfully!")
                     st.rerun()
                 except:
-                    st.error("Invalid numbers. Use commas.")
-        return None, None
+                    st.error("Invalid numbers.")
+        return st.session_state.get('twog_df', None)
     else:
-        st.subheader("Upload Data File for Two Groups")
-        uploaded = st.file_uploader("Choose Excel or CSV", type=['xlsx', 'csv'], key="two_groups_upload")
+        st.subheader("Upload Two Groups Data")
+        uploaded = st.file_uploader("CSV/Excel (first two columns = groups)", type=['xlsx','csv'], key="twog_upload")
         if uploaded:
-            if uploaded.name.endswith('.csv'):
-                df = pd.read_csv(uploaded)
-            else:
-                df = pd.read_excel(uploaded)
+            df = pd.read_csv(uploaded) if uploaded.name.endswith('.csv') else pd.read_excel(uploaded)
             if df.shape[1] >= 2:
-                st.write("Data preview:")
-                st.dataframe(df, use_container_width=True)
-                if st.button("✅ Save Uploaded Data", key="save_groups_upload"):
-                    st.session_state.Y = (df.iloc[:,0].values, df.iloc[:,1].values)
-                    st.session_state.treatment_names = df.columns[:2].tolist()
+                g1 = df.iloc[:,0].dropna().values
+                g2 = df.iloc[:,1].dropna().values
+                long_df = pd.DataFrame({'Group': ['G1']*len(g1) + ['G2']*len(g2),
+                                        'Value': np.concatenate([g1, g2])})
+                st.dataframe(long_df)
+                if st.button("✅ Save Uploaded Data"):
+                    st.session_state.twog_df = long_df
                     st.session_state.data_loaded = True
-                    st.session_state.analysis_done = False
-                    st.success("Data saved successfully!")
                     st.rerun()
             else:
-                st.error("File must have at least two columns.")
-    return None, None
+                st.error("Need at least two columns.")
+        return None
 
-def load_data_for_tukey():
+def load_tukey():
     if data_source == "✏️ Manual entry":
         st.subheader("Manual Data Entry for Tukey HSD")
-        st.write("Enter data for multiple groups, one group per line: GroupName: val1,val2,...")
+        st.write("One group per line: GroupName: val1,val2,...")
         with st.form(key="tukey_form"):
-            text_input = st.text_area("Groups data", "Group1: 23,25,28\nGroup2: 19,21,24\nGroup3: 15,18,20", key="tukey_input")
+            text_input = st.text_area("Groups data", "Group1: 23,25,28\nGroup2: 19,21,24\nGroup3: 15,18,20")
             submitted = st.form_submit_button("✅ Save Data")
             if submitted:
-                values = []
-                labels = []
+                values, labels = [], []
                 try:
                     for line in text_input.strip().split('\n'):
                         if ':' in line:
@@ -211,234 +167,229 @@ def load_data_for_tukey():
                             vals = [float(x.strip()) for x in vals_str.split(',')]
                             values.extend(vals)
                             labels.extend([label.strip()] * len(vals))
-                    st.session_state.Y = (np.array(values), np.array(labels))
+                    st.session_state.tukey_df = pd.DataFrame({'Group': labels, 'Value': values})
                     st.session_state.data_loaded = True
-                    st.session_state.analysis_done = False
-                    st.success("Data saved successfully!")
                     st.rerun()
                 except:
-                    st.error("Error parsing input.")
-        return None, None
+                    st.error("Parse error.")
+        return st.session_state.get('tukey_df', None)
     else:
-        st.subheader("Upload Data File for Tukey HSD")
-        st.info("Upload a file where each column represents a group.")
-        uploaded = st.file_uploader("Choose file", type=['xlsx', 'csv'], key="tukey_upload")
+        st.subheader("Upload Tukey Data (each column = group)")
+        uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="tukey_upload")
         if uploaded:
-            if uploaded.name.endswith('.csv'):
-                df = pd.read_csv(uploaded)
-            else:
-                df = pd.read_excel(uploaded)
-            st.write("Data preview:")
-            st.dataframe(df, use_container_width=True)
-            if st.button("✅ Save Uploaded Data", key="save_tukey_upload"):
-                values = []
-                labels = []
+            df = pd.read_csv(uploaded) if uploaded.name.endswith('.csv') else pd.read_excel(uploaded)
+            st.dataframe(df)
+            if st.button("✅ Save Uploaded Data"):
+                values, labels = [], []
                 for col in df.columns:
                     vals = df[col].dropna().values
                     values.extend(vals)
                     labels.extend([col] * len(vals))
-                st.session_state.Y = (np.array(values), np.array(labels))
+                st.session_state.tukey_df = pd.DataFrame({'Group': labels, 'Value': values})
                 st.session_state.data_loaded = True
-                st.session_state.analysis_done = False
-                st.success("Data saved successfully!")
                 st.rerun()
-    return None, None
+        return None
 
-# ================================
-# تحميل البيانات حسب نوع الاختبار
-# ================================
+def load_factorial():
+    if data_source == "✏️ Manual entry":
+        st.subheader("Two-Way Factorial ANOVA with Blocking")
+        with st.form(key="factorial_form"):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                levels_a = st.number_input("Factor A levels", min_value=2, max_value=5, value=2)
+            with col2:
+                levels_b = st.number_input("Factor B levels", min_value=2, max_value=5, value=2)
+            with col3:
+                blocks = st.number_input("Number of blocks", min_value=2, max_value=5, value=2)
+
+            names_a = []
+            names_b = []
+            names_block = []
+
+            st.write("**Factor A (e.g., Cutting Speed) levels:**")
+            cols_a = st.columns(int(levels_a))
+            for i in range(int(levels_a)):
+                with cols_a[i]:
+                    name = st.text_input(f"A{i+1}", value=f"A{i+1}")
+                    names_a.append(name)
+
+            st.write("**Factor B (e.g., Coolant) levels:**")
+            cols_b = st.columns(int(levels_b))
+            for j in range(int(levels_b)):
+                with cols_b[j]:
+                    name = st.text_input(f"B{j+1}", value=f"B{j+1}")
+                    names_b.append(name)
+
+            st.write("**Block names:**")
+            cols_block = st.columns(int(blocks))
+            for k in range(int(blocks)):
+                with cols_block[k]:
+                    name = st.text_input(f"Block{k+1}", value=f"Block{k+1}")
+                    names_block.append(name)
+
+            st.write("**Response values for each block:**")
+            rows = []
+            for k in range(int(blocks)):
+                st.write(f"**{names_block[k]}**")
+                for i in range(int(levels_a)):
+                    for j in range(int(levels_b)):
+                        val = st.number_input(f"{names_a[i]} × {names_b[j]}", value=10.0, key=f"fact_{k}_{i}_{j}", step=0.1)
+                        rows.append({
+                            'Block': names_block[k],
+                            'FactorA': names_a[i],
+                            'FactorB': names_b[j],
+                            'Response': val
+                        })
+            submitted = st.form_submit_button("✅ Save Data")
+            if submitted:
+                df = pd.DataFrame(rows)
+                st.session_state.factorial_df = df
+                st.session_state.data_loaded = True
+                st.rerun()
+        return st.session_state.get('factorial_df', None)
+    else:
+        st.subheader("Upload Factorial Data")
+        st.info("File must have columns: Block, FactorA, FactorB, Response")
+        uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="fact_upload")
+        if uploaded:
+            df = pd.read_csv(uploaded) if uploaded.name.endswith('.csv') else pd.read_excel(uploaded)
+            required = ['Block', 'FactorA', 'FactorB', 'Response']
+            if all(col in df.columns for col in required):
+                st.dataframe(df)
+                if st.button("✅ Save Uploaded Data"):
+                    st.session_state.factorial_df = df.dropna()
+                    st.session_state.data_loaded = True
+                    st.rerun()
+            else:
+                st.error(f"Missing required columns: {required}")
+        return None
+
+# ============================================================
+# Load data based on test type
+# ============================================================
 if test_type == "ANOVA (F-test) - RBD":
-    load_data_for_anova()
-elif test_type == "Two-Sample t-test" or test_type == "Two-Sample Z-test":
-    load_data_for_two_groups()
+    load_rbd()
+elif test_type in ["Two-Sample t-test", "Two-Sample Z-test"]:
+    load_two_groups()
 elif test_type == "Tukey HSD (Post-hoc)":
-    load_data_for_tukey()
+    load_tukey()
+elif test_type == "Two-Way Factorial ANOVA with Blocking":
+    load_factorial()
 
-# عرض حالة البيانات المحفوظة
-if st.session_state.data_loaded:
-    st.info(f"✅ Data loaded successfully! Ready to analyze.")
-
-# زر التحليل الرئيسي
-if st.button("🔬 Run Analysis", type="primary", key="run_analysis"):
+# ============================================================
+# Analysis button
+# ============================================================
+if st.button("🔬 Run Analysis", type="primary"):
     if not st.session_state.data_loaded:
         st.error("Please load data first using the 'Save Data' button.")
         st.stop()
-    
-    st.session_state.analysis_done = True
-    
+
     if test_type == "ANOVA (F-test) - RBD":
-        Y = st.session_state.Y
-        treatment_names = st.session_state.treatment_names
-        block_names = st.session_state.block_names
-        
-        t, b = Y.shape
-        grand_mean = np.mean(Y)
-        treatment_means = np.mean(Y, axis=1)
-        block_means = np.mean(Y, axis=0)
-
-        SST = np.sum((Y - grand_mean)**2)
-        SSTreat = b * np.sum((treatment_means - grand_mean)**2)
-        SSBlock = t * np.sum((block_means - grand_mean)**2)
-        SSE = SST - SSTreat - SSBlock
-
-        df_treat = t - 1
-        df_block = b - 1
-        df_error = (t-1)*(b-1)
-        df_total = t*b - 1
-
-        MSTreat = SSTreat / df_treat
-        MSBlock = SSBlock / df_block
-        MSE = SSE / df_error
-
-        F_treat = MSTreat / MSE
-        F_block = MSBlock / MSE
-
-        F_crit_treat = stats.f.ppf(1-alpha, df_treat, df_error)
-        F_crit_block = stats.f.ppf(1-alpha, df_block, df_error)
-        p_treat = 1 - stats.f.cdf(F_treat, df_treat, df_error)
-        p_block = 1 - stats.f.cdf(F_block, df_block, df_error)
-
+        df = st.session_state.rbd_df
+        model = ols('Response ~ C(Treatment) + C(Block)', data=df).fit()
+        anova = sm.stats.anova_lm(model, typ=3)  # Type III for unbalanced data
         st.markdown("---")
-        st.header("📈 ANOVA Results")
-        anova_df = pd.DataFrame({
-            'Source': ['Treatments', 'Blocks', 'Error', 'Total'],
-            'SS': [SSTreat, SSBlock, SSE, SST],
-            'df': [df_treat, df_block, df_error, df_total],
-            'MS': [MSTreat, MSBlock, MSE, np.nan],
-            'F': [F_treat, F_block, np.nan, np.nan],
-            'p-value': [p_treat, p_block, np.nan, np.nan]
-        })
-        anova_display = anova_df.round(2)
-        anova_display['p-value'] = anova_display['p-value'].round(4)
-        anova_display = anova_display.fillna('')
-        st.dataframe(anova_display, use_container_width=True)
-
-        col1, col2, col3 = st.columns(3)
+        st.header("📈 ANOVA Results (RBD)")
+        st.dataframe(anova.round(4), use_container_width=True)
+        # Means
+        treat_means = df.groupby('Treatment')['Response'].mean().round(3)
+        block_means = df.groupby('Block')['Response'].mean().round(3)
+        col1, col2 = st.columns(2)
         with col1:
-            st.info(f"**Grand Mean:** {grand_mean:.2f}")
-            st.write("**Treatment Means:**")
-            for name, val in zip(treatment_names, treatment_means):
-                st.write(f"- {name}: {val:.2f}")
+            st.write("**Treatment Means**")
+            st.dataframe(pd.DataFrame(treat_means))
         with col2:
-            st.success(f"**F (Treatments):** {F_treat:.2f}")
-            st.write(f"**Critical F:** {F_crit_treat:.2f}")
-            st.write(f"**p-value:** {p_treat:.4f}")
-            if p_treat < alpha:
-                st.error("❌ **Reject H0:** Significant differences among treatments.")
-                show_tukey = True
-            else:
-                st.success("✅ **Fail to reject H0:** No significant differences.")
-                show_tukey = False
-        with col3:
-            st.success(f"**F (Blocks):** {F_block:.2f}")
-            st.write(f"**Critical F:** {F_crit_block:.2f}")
-            st.write(f"**p-value:** {p_block:.4f}")
-            if p_block < alpha:
-                st.warning("⚠️ **Significant block effect.**")
-            else:
-                st.info("✅ **No significant block effect.**")
-
-        # Bar plots
-        fig, axes = plt.subplots(1, 2, figsize=(12,4))
-        axes[0].bar(treatment_names, treatment_means, color='skyblue', edgecolor='navy')
-        axes[0].set_xlabel('Treatments')
-        axes[0].set_ylabel('Mean Response')
-        axes[0].set_title('Treatment Means')
-        axes[0].grid(axis='y', linestyle='--', alpha=0.7)
-        axes[1].bar(block_names, block_means, color='lightcoral', edgecolor='darkred')
-        axes[1].set_xlabel('Blocks')
-        axes[1].set_ylabel('Mean Response')
-        axes[1].set_title('Block Means')
-        axes[1].grid(axis='y', linestyle='--', alpha=0.7)
-        plt.tight_layout()
+            st.write("**Block Means**")
+            st.dataframe(pd.DataFrame(block_means))
+        # Plot
+        fig, ax = plt.subplots(1,2,figsize=(12,4))
+        treat_means.plot(kind='bar', ax=ax[0], color='skyblue')
+        ax[0].set_title('Treatment Means')
+        block_means.plot(kind='bar', ax=ax[1], color='lightcoral')
+        ax[1].set_title('Block Means')
         st.pyplot(fig)
-
-        if show_tukey:
-            with st.expander("🔍 Tukey HSD Post-hoc Test"):
-                long_data = []
-                for i, treat in enumerate(treatment_names):
-                    for j in range(b):
-                        long_data.append((Y[i,j], treat))
-                df_long = pd.DataFrame(long_data, columns=['value', 'treatment'])
-                tukey_res = pairwise_tukeyhsd(df_long['value'], df_long['treatment'], alpha=alpha)
-                st.dataframe(pd.DataFrame(data=tukey_res.summary().data[1:], columns=tukey_res.summary().data[0]))
-                fig_t, ax_t = plt.subplots()
-                tukey_res.plot_simultaneous(ax=ax_t)
-                st.pyplot(fig_t)
-
-        with st.expander("Show Operating Characteristic (OC) Curve"):
-            lambda_vals = np.linspace(0, 30, 200)
-            beta_vals = [stats.ncf.cdf(F_crit_treat, df_treat, df_error, lam) for lam in lambda_vals]
-            fig_oc, ax_oc = plt.subplots(figsize=(8,4))
-            ax_oc.plot(lambda_vals, beta_vals, 'b-', linewidth=2)
-            ax_oc.axhline(y=1-alpha, color='r', linestyle='--', label=f'β = {1-alpha}')
-            ax_oc.set_xlabel('Noncentrality parameter λ')
-            ax_oc.set_ylabel('Probability of accepting H₀ (β)')
-            ax_oc.set_title('Operating Characteristic Curve')
-            ax_oc.grid(True, linestyle='--', alpha=0.5)
-            ax_oc.legend()
-            st.pyplot(fig_oc)
 
     elif test_type == "Two-Sample t-test":
-        g1, g2 = st.session_state.Y
-        group_names = st.session_state.treatment_names
+        df = st.session_state.twog_df
+        g1 = df[df['Group']==df['Group'].unique()[0]]['Value'].values
+        g2 = df[df['Group']==df['Group'].unique()[1]]['Value'].values
         t_stat, p_val = stats.ttest_ind(g1, g2, equal_var=False)
-        df_welch = (np.var(g1, ddof=1)/len(g1) + np.var(g2, ddof=1)/len(g2))**2 / (
-            (np.var(g1, ddof=1)/len(g1))**2/(len(g1)-1) + (np.var(g2, ddof=1)/len(g2))**2/(len(g2)-1)
-        )
-        crit_t = stats.t.ppf(1-alpha/2, df_welch)
         st.markdown("---")
-        st.header("📈 Two-Sample t-test Results (Welch)")
-        st.write(f"**{group_names[0]}:** n={len(g1)}, mean={np.mean(g1):.2f}, std={np.std(g1, ddof=1):.2f}")
-        st.write(f"**{group_names[1]}:** n={len(g2)}, mean={np.mean(g2):.2f}, std={np.std(g2, ddof=1):.2f}")
-        st.write(f"**t-statistic:** {t_stat:.4f}")
-        st.write(f"**Degrees of freedom (Welch):** {df_welch:.2f}")
-        st.write(f"**Critical t (α={alpha}):** ±{crit_t:.4f}")
-        st.write(f"**p-value:** {p_val:.4f}")
+        st.header("Two-Sample t-test Results (Welch)")
+        st.write(f"Group1: n={len(g1)}, mean={np.mean(g1):.3f}")
+        st.write(f"Group2: n={len(g2)}, mean={np.mean(g2):.3f}")
+        st.write(f"t = {t_stat:.4f}, p = {p_val:.4f}")
         if p_val < alpha:
-            st.error("❌ Reject H0: Significant difference.")
+            st.error("Reject H0: Significant difference.")
         else:
-            st.success("✅ Fail to reject H0: No significant difference.")
-        fig, ax = plt.subplots()
-        ax.boxplot([g1, g2], labels=group_names)
-        ax.set_ylabel('Values')
-        st.pyplot(fig)
+            st.success("Fail to reject H0: No significant difference.")
 
     elif test_type == "Two-Sample Z-test":
-        g1, g2 = st.session_state.Y
-        group_names = st.session_state.treatment_names
-        var1 = np.var(g1, ddof=1)
-        var2 = np.var(g2, ddof=1)
-        se = np.sqrt(var1/len(g1) + var2/len(g2))
-        z_stat = (np.mean(g1) - np.mean(g2)) / se
-        p_val = 2 * (1 - stats.norm.cdf(abs(z_stat)))
-        crit_z = stats.norm.ppf(1 - alpha/2)
+        df = st.session_state.twog_df
+        g1 = df[df['Group']==df['Group'].unique()[0]]['Value'].values
+        g2 = df[df['Group']==df['Group'].unique()[1]]['Value'].values
+        se = np.sqrt(np.var(g1,ddof=1)/len(g1) + np.var(g2,ddof=1)/len(g2))
+        z_stat = (np.mean(g1)-np.mean(g2))/se
+        p_val = 2*(1 - stats.norm.cdf(abs(z_stat)))
         st.markdown("---")
-        st.header("📈 Two-Sample Z-test Results")
-        st.write(f"**{group_names[0]}:** mean={np.mean(g1):.2f}, n={len(g1)}")
-        st.write(f"**{group_names[1]}:** mean={np.mean(g2):.2f}, n={len(g2)}")
-        st.write(f"**Z-statistic:** {z_stat:.4f}")
-        st.write(f"**Critical Z (α={alpha}):** ±{crit_z:.4f}")
-        st.write(f"**p-value:** {p_val:.4f}")
+        st.header("Two-Sample Z-test Results")
+        st.write(f"z = {z_stat:.4f}, p = {p_val:.4f}")
         if p_val < alpha:
-            st.error("❌ Reject H0: Significant difference.")
+            st.error("Reject H0: Significant difference.")
         else:
-            st.success("✅ Fail to reject H0: No significant difference.")
-        fig, ax = plt.subplots()
-        ax.boxplot([g1, g2], labels=group_names)
-        st.pyplot(fig)
+            st.success("Fail to reject H0: No significant difference.")
 
     elif test_type == "Tukey HSD (Post-hoc)":
-        values, labels = st.session_state.Y
-        tukey_res = pairwise_tukeyhsd(values, labels, alpha=alpha)
+        df = st.session_state.tukey_df
+        tukey = pairwise_tukeyhsd(df['Value'], df['Group'], alpha=alpha)
         st.markdown("---")
-        st.header("📈 Tukey HSD Results")
-        st.dataframe(pd.DataFrame(data=tukey_res.summary().data[1:], columns=tukey_res.summary().data[0]))
+        st.header("Tukey HSD Results")
+        st.dataframe(pd.DataFrame(data=tukey.summary().data[1:], columns=tukey.summary().data[0]))
         fig, ax = plt.subplots()
-        tukey_res.plot_simultaneous(ax=ax)
+        tukey.plot_simultaneous(ax=ax)
         st.pyplot(fig)
+
+    elif test_type == "Two-Way Factorial ANOVA with Blocking":
+        df = st.session_state.factorial_df
+        # Model with main effects and interaction
+        model = ols('Response ~ C(FactorA) + C(FactorB) + C(Block) + C(FactorA):C(FactorB)', data=df).fit()
+        anova = sm.stats.anova_lm(model, typ=3)  # Type III
+        st.markdown("---")
+        st.header("📈 Two-Way Factorial ANOVA with Blocking")
+        st.subheader("ANOVA Table (Type III Sum of Squares)")
+        st.dataframe(anova.round(4), use_container_width=True)
+
+        # Marginal means
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**Factor A Means**")
+            means_a = df.groupby('FactorA')['Response'].mean().round(3)
+            st.dataframe(pd.DataFrame(means_a))
+        with col2:
+            st.write("**Factor B Means**")
+            means_b = df.groupby('FactorB')['Response'].mean().round(3)
+            st.dataframe(pd.DataFrame(means_b))
+
+        # Interaction plot
+        st.subheader("Interaction Plot")
+        fig, ax = plt.subplots()
+        sns.pointplot(data=df, x='FactorA', y='Response', hue='FactorB', dodge=True,
+                      markers=['o','s'], linestyle='-', errorbar='se', ax=ax)
+        ax.set_title('Interaction between Factor A and Factor B')
+        ax.grid(True, linestyle='--', alpha=0.6)
+        st.pyplot(fig)
+
+        # Tukey HSD for main effects if levels > 2
+        if len(df['FactorA'].unique()) > 2:
+            with st.expander("Tukey HSD for Factor A"):
+                tukey_a = pairwise_tukeyhsd(df['Response'], df['FactorA'], alpha=alpha)
+                st.dataframe(pd.DataFrame(data=tukey_a.summary().data[1:], columns=tukey_a.summary().data[0]))
+        if len(df['FactorB'].unique()) > 2:
+            with st.expander("Tukey HSD for Factor B"):
+                tukey_b = pairwise_tukeyhsd(df['Response'], df['FactorB'], alpha=alpha)
+                st.dataframe(pd.DataFrame(data=tukey_b.summary().data[1:], columns=tukey_b.summary().data[0]))
 
     st.success("✅ Analysis complete!")
 
 st.markdown("---")
-st.caption("Multi-Test Statistical Analysis Suite – Manual entry or Excel/CSV upload only.")
+st.caption("Multi-Test Statistical Analysis Suite | Accurate Type III ANOVA | Factorial with Blocking")
