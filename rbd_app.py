@@ -6,7 +6,7 @@ from scipy import stats
 import statsmodels.api as sm
 from statsmodels.formula.api import ols
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
-import re
+import time
 
 st.set_page_config(page_title="Multi-Test Statistical Analysis Suite", page_icon="📊", layout="wide")
 
@@ -25,6 +25,7 @@ st.markdown("---")
 # Initialize session state
 if 'test_type' not in st.session_state:
     st.session_state.test_type = "Two-Way Factorial ANOVA with Blocking"
+# Data containers
 if 'factorial_df' not in st.session_state:
     st.session_state.factorial_df = None
 if 'rbd_df' not in st.session_state:
@@ -33,6 +34,7 @@ if 'twog_df' not in st.session_state:
     st.session_state.twog_df = None
 if 'tukey_df' not in st.session_state:
     st.session_state.tukey_df = None
+# Loaded flags
 if 'factorial_loaded' not in st.session_state:
     st.session_state.factorial_loaded = False
 if 'rbd_loaded' not in st.session_state:
@@ -64,10 +66,15 @@ with st.sidebar:
     )
     if new_test_type != st.session_state.test_type:
         st.session_state.test_type = new_test_type
-        st.session_state.factorial_loaded = False
-        st.session_state.rbd_loaded = False
-        st.session_state.twog_loaded = False
-        st.session_state.tukey_loaded = False
+        # Reset only the loaded flag for the new test, not all data
+        if new_test_type == "Two-Way Factorial ANOVA with Blocking":
+            st.session_state.factorial_loaded = False
+        elif new_test_type == "ANOVA (F-test) - RBD":
+            st.session_state.rbd_loaded = False
+        elif new_test_type in ["Two-Sample t-test", "Two-Sample Z-test"]:
+            st.session_state.twog_loaded = False
+        elif new_test_type == "Tukey HSD (Post-hoc)":
+            st.session_state.tukey_loaded = False
         st.rerun()
     
     data_source = st.radio("Data input method:", ["📂 Upload Excel/CSV", "✏️ Manual entry"])
@@ -89,8 +96,18 @@ with st.sidebar:
         st.rerun()
 
 # ------------------------------------------------------------------
-# Helper functions
+# Helper functions (cached for speed)
 # ------------------------------------------------------------------
+@st.cache_data
+def convert_wide_to_long_factorial(df_wide):
+    """Convert wide format (first col = FactorA levels, others = FactorB levels) to long."""
+    factor_a_col = df_wide.columns[0]
+    factor_b_cols = df_wide.columns[1:]
+    melted = pd.melt(df_wide, id_vars=[factor_a_col], var_name='FactorB', value_name='Response')
+    melted.rename(columns={factor_a_col: 'FactorA'}, inplace=True)
+    melted['Block'] = 'All'  # dummy block if none provided
+    return melted
+
 def mean_ci(vals):
     m = np.mean(vals)
     n = len(vals)
@@ -110,6 +127,7 @@ def load_factorial():
 
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload Factorial Data")
+        st.info("Accepts wide format (first column = Factor A levels, other columns = Factor B levels) or long format (Block, FactorA, FactorB, Response).")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="fact_upload")
         if uploaded:
             try:
@@ -122,33 +140,38 @@ def load_factorial():
                 return
             st.write("Preview:")
             st.dataframe(df_raw.head())
-            # Attempt to convert to long format with Block, FactorA, FactorB, Response
-            # Simple mapping: assume first column is FactorA, second is FactorB, third is Response, optional Block
-            if df_raw.shape[1] == 3:
+            
+            # Detect format: if number of columns is 2 or more and first column has 2+ unique values, likely wide format
+            if df_raw.shape[1] >= 3 and df_raw.iloc[:,0].nunique() >= 2:
+                # Wide format: first col = FactorA, rest = FactorB levels
+                df_long = convert_wide_to_long_factorial(df_raw)
+                st.success("Detected wide format. Converted to long automatically.")
+                st.write("Converted data (first 5 rows):")
+                st.dataframe(df_long.head())
+                # Set factor names from column headers
+                st.session_state.fact_names = {'FactorA': df_raw.columns[0], 'FactorB': ' vs '.join(df_raw.columns[1:])}
+            elif df_raw.shape[1] == 3:
+                # Assume long format: FactorA, FactorB, Response (no Block)
                 df_long = pd.DataFrame({
                     'Block': 'All',
                     'FactorA': df_raw.iloc[:,0].astype(str),
                     'FactorB': df_raw.iloc[:,1].astype(str),
                     'Response': pd.to_numeric(df_raw.iloc[:,2])
                 })
+                st.session_state.fact_names = {'FactorA': df_raw.columns[0], 'FactorB': df_raw.columns[1]}
             elif df_raw.shape[1] == 4:
+                # Long format with Block
                 df_long = pd.DataFrame({
                     'Block': df_raw.iloc[:,0].astype(str),
                     'FactorA': df_raw.iloc[:,1].astype(str),
                     'FactorB': df_raw.iloc[:,2].astype(str),
                     'Response': pd.to_numeric(df_raw.iloc[:,3])
                 })
-            else:
-                st.error("Data must have 3 or 4 columns: (Block), FactorA, FactorB, Response")
-                return
-            st.session_state.factorial_df = df_long.dropna()
-            # Set factor names from column headers if possible
-            if df_raw.shape[1] == 3:
-                st.session_state.fact_names = {'FactorA': df_raw.columns[0], 'FactorB': df_raw.columns[1]}
-            elif df_raw.shape[1] == 4:
                 st.session_state.fact_names = {'FactorA': df_raw.columns[1], 'FactorB': df_raw.columns[2]}
             else:
-                st.session_state.fact_names = {'FactorA': 'Factor A', 'FactorB': 'Factor B'}
+                st.error("Unsupported data shape. Use wide (2+ columns) or long (3 or 4 columns).")
+                return
+            st.session_state.factorial_df = df_long.dropna()
             st.session_state.factorial_loaded = True
             st.rerun()
         return
@@ -157,10 +180,10 @@ def load_factorial():
         with st.form(key="fact_manual"):
             col1, col2 = st.columns(2)
             with col1:
-                name_a = st.text_input("Name of Factor A (e.g., 'Coolant'):", value="Factor A")
+                name_a = st.text_input("Name of Factor A (e.g., 'Cutting Speed'):", value="Factor A")
                 levels_a = st.number_input("Levels of Factor A", min_value=2, max_value=5, value=2)
             with col2:
-                name_b = st.text_input("Name of Factor B (e.g., 'Cutting Speed'):", value="Factor B")
+                name_b = st.text_input("Name of Factor B (e.g., 'Coolant'):", value="Factor B")
                 levels_b = st.number_input("Levels of Factor B", min_value=2, max_value=5, value=2)
             has_block = st.checkbox("Include Block factor?", value=True)
             if has_block:
@@ -315,6 +338,7 @@ def load_rbd():
 
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload RBD Data")
+        st.info("File must have columns: Treatment, Block, Response (in that order).")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="rbd_upload")
         if uploaded:
             try:
@@ -327,7 +351,6 @@ def load_rbd():
                 return
             st.write("Preview:")
             st.dataframe(df_raw.head())
-            # Expect columns: Treatment, Block, Response
             if df_raw.shape[1] >= 3:
                 df = pd.DataFrame({
                     'Treatment': df_raw.iloc[:,0].astype(str),
@@ -340,7 +363,7 @@ def load_rbd():
             else:
                 st.error("Need at least 3 columns: Treatment, Block, Response")
         return
-    else:  # Manual entry
+    else:
         st.subheader("Manual RBD Entry")
         with st.form(key="rbd_manual"):
             t = st.number_input("Treatments", min_value=2, max_value=10, value=3)
@@ -572,4 +595,4 @@ elif st.session_state.test_type == "Tukey HSD (Post-hoc)":
             analyze_tukey(st.session_state.tukey_df, alpha)
 
 st.markdown("---")
-st.caption("Multi-Test Statistical Analysis Suite | Independent tests with full plots")
+st.caption("Multi-Test Statistical Analysis Suite | Fast & flexible | Wide/long format support")
