@@ -22,11 +22,9 @@ st.title("📊 Multi-Test Statistical Analysis Suite")
 st.markdown("### *ANOVA (RBD) | t-test | Z-test | Tukey | Factorial ANOVA with Blocking*")
 st.markdown("---")
 
-# Initialize session state for each test type separately
+# Initialize session state
 if 'test_type' not in st.session_state:
     st.session_state.test_type = "Two-Way Factorial ANOVA with Blocking"
-
-# Data containers
 if 'factorial_df' not in st.session_state:
     st.session_state.factorial_df = None
 if 'rbd_df' not in st.session_state:
@@ -35,8 +33,6 @@ if 'twog_df' not in st.session_state:
     st.session_state.twog_df = None
 if 'tukey_df' not in st.session_state:
     st.session_state.tukey_df = None
-
-# Flags for each test
 if 'factorial_loaded' not in st.session_state:
     st.session_state.factorial_loaded = False
 if 'rbd_loaded' not in st.session_state:
@@ -45,8 +41,6 @@ if 'twog_loaded' not in st.session_state:
     st.session_state.twog_loaded = False
 if 'tukey_loaded' not in st.session_state:
     st.session_state.tukey_loaded = False
-
-# Factor names for factorial
 if 'fact_names' not in st.session_state:
     st.session_state.fact_names = None
 
@@ -60,7 +54,6 @@ with st.sidebar:
     st.markdown("👨‍🏫 Supervisor: Dr. Osamah Fadhil Abdulateef")
     st.markdown("---")
     
-    # Test selection
     new_test_type = st.selectbox(
         "Select Statistical Test:",
         ["Two-Way Factorial ANOVA with Blocking",
@@ -69,10 +62,8 @@ with st.sidebar:
          "Two-Sample Z-test",
          "Tukey HSD (Post-hoc)"]
     )
-    # If test type changed, reset flags to avoid confusion
     if new_test_type != st.session_state.test_type:
         st.session_state.test_type = new_test_type
-        # Reset all loaded flags (user must reload data for new test)
         st.session_state.factorial_loaded = False
         st.session_state.rbd_loaded = False
         st.session_state.twog_loaded = False
@@ -83,7 +74,6 @@ with st.sidebar:
     alpha = st.number_input("Significance level (α)", min_value=0.01, max_value=0.20, value=0.05, step=0.01)
     
     if st.button("🗑️ Clear Current Data"):
-        # Clear data only for the current test
         if st.session_state.test_type == "Two-Way Factorial ANOVA with Blocking":
             st.session_state.factorial_df = None
             st.session_state.factorial_loaded = False
@@ -99,58 +89,9 @@ with st.sidebar:
         st.rerun()
 
 # ------------------------------------------------------------------
-# Helper functions (common)
+# Helper functions
 # ------------------------------------------------------------------
-def auto_rename_columns(df, test_type):
-    """Map columns to standard names based on test type."""
-    mapping = {}
-    for col in df.columns:
-        col_low = col.lower().strip()
-        if test_type == "Two-Way Factorial ANOVA with Blocking":
-            if re.search(r'block|batch|day|time', col_low):
-                mapping[col] = 'Block'
-            elif re.search(r'cutting|speed|factor\s*a|treatment|method|speed', col_low):
-                mapping[col] = 'FactorA'
-            elif re.search(r'coolant|lubricant|fluid|factor\s*b', col_low):
-                mapping[col] = 'FactorB'
-            elif re.search(r'roughness|surface|response|value|result', col_low):
-                mapping[col] = 'Response'
-        elif test_type == "ANOVA (F-test) - RBD":
-            if re.search(r'treatment|method|group', col_low):
-                mapping[col] = 'Treatment'
-            elif re.search(r'block|batch|day', col_low):
-                mapping[col] = 'Block'
-            elif re.search(r'response|value|result', col_low):
-                mapping[col] = 'Response'
-    return df.rename(columns=mapping), mapping
-
-def melt_wide_factorial(df):
-    """Convert wide format (first col = FactorA levels, others = FactorB levels) to long."""
-    factor_a_col = df.columns[0]
-    factor_b_levels = df.columns[1:]
-    melted = pd.melt(df, id_vars=[factor_a_col], var_name='FactorB', value_name='Response')
-    melted.rename(columns={factor_a_col: 'FactorA'}, inplace=True)
-    melted['Block'] = 'All'  # dummy block
-    return melted
-
-def ensure_long_format(df):
-    """Ensure factorial data is in long format with Block, FactorA, FactorB, Response."""
-    required = ['Block', 'FactorA', 'FactorB', 'Response']
-    if all(col in df.columns for col in required):
-        return df
-    df_mapped, _ = auto_rename_columns(df, "Two-Way Factorial ANOVA with Blocking")
-    if all(col in df_mapped.columns for col in required):
-        return df_mapped
-    if df.shape[1] >= 3 and df.shape[0] >= 2:
-        try:
-            return melt_wide_factorial(df)
-        except:
-            pass
-    st.error("Could not parse data. Use long format (Block, FactorA, FactorB, Response) or wide (first col = FactorA levels).")
-    return None
-
 def mean_ci(vals):
-    """Return mean and half-width of 95% CI."""
     m = np.mean(vals)
     n = len(vals)
     if n > 1:
@@ -165,39 +106,53 @@ def mean_ci(vals):
 def load_factorial():
     if st.session_state.factorial_loaded and st.session_state.factorial_df is not None:
         st.success("✅ Factorial data already loaded. You can run analysis.")
-        return st.session_state.factorial_df
+        return
 
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload Factorial Data")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="fact_upload")
         if uploaded:
             try:
-                df_raw = pd.read_excel(uploaded, engine='openpyxl') if not uploaded.name.endswith('.csv') else pd.read_csv(uploaded)
+                if uploaded.name.endswith('.csv'):
+                    df_raw = pd.read_csv(uploaded)
+                else:
+                    df_raw = pd.read_excel(uploaded, engine='openpyxl')
             except Exception as e:
-                st.error(f"Error: {e}")
-                return None
+                st.error(f"Error reading file: {e}")
+                return
             st.write("Preview:")
             st.dataframe(df_raw.head())
-            df_long = ensure_long_format(df_raw)
-            if df_long is None:
-                return None
-            # Try to get original column names for factors
-            orig_names = {}
-            for col in df_raw.columns:
-                if 'FactorA' in df_long.columns and col in df_raw.columns and df_raw[col].dtype == 'object':
-                    orig_names['FactorA'] = col
-                elif 'FactorB' in df_long.columns and col in df_raw.columns:
-                    orig_names['FactorB'] = col
-            if 'FactorA' not in orig_names:
-                orig_names['FactorA'] = 'Factor A'
-            if 'FactorB' not in orig_names:
-                orig_names['FactorB'] = 'Factor B'
-            st.session_state.fact_names = orig_names
+            # Attempt to convert to long format with Block, FactorA, FactorB, Response
+            # Simple mapping: assume first column is FactorA, second is FactorB, third is Response, optional Block
+            if df_raw.shape[1] == 3:
+                df_long = pd.DataFrame({
+                    'Block': 'All',
+                    'FactorA': df_raw.iloc[:,0].astype(str),
+                    'FactorB': df_raw.iloc[:,1].astype(str),
+                    'Response': pd.to_numeric(df_raw.iloc[:,2])
+                })
+            elif df_raw.shape[1] == 4:
+                df_long = pd.DataFrame({
+                    'Block': df_raw.iloc[:,0].astype(str),
+                    'FactorA': df_raw.iloc[:,1].astype(str),
+                    'FactorB': df_raw.iloc[:,2].astype(str),
+                    'Response': pd.to_numeric(df_raw.iloc[:,3])
+                })
+            else:
+                st.error("Data must have 3 or 4 columns: (Block), FactorA, FactorB, Response")
+                return
             st.session_state.factorial_df = df_long.dropna()
+            # Set factor names from column headers if possible
+            if df_raw.shape[1] == 3:
+                st.session_state.fact_names = {'FactorA': df_raw.columns[0], 'FactorB': df_raw.columns[1]}
+            elif df_raw.shape[1] == 4:
+                st.session_state.fact_names = {'FactorA': df_raw.columns[1], 'FactorB': df_raw.columns[2]}
+            else:
+                st.session_state.fact_names = {'FactorA': 'Factor A', 'FactorB': 'Factor B'}
             st.session_state.factorial_loaded = True
             st.rerun()
-        return None
-    else:
+        return
+    else:  # Manual entry
         st.subheader("Manual Entry for Factorial ANOVA")
         with st.form(key="fact_manual"):
             col1, col2 = st.columns(2)
@@ -207,7 +162,7 @@ def load_factorial():
             with col2:
                 name_b = st.text_input("Name of Factor B (e.g., 'Cutting Speed'):", value="Factor B")
                 levels_b = st.number_input("Levels of Factor B", min_value=2, max_value=5, value=2)
-            has_block = st.checkbox("Include Block?", value=True)
+            has_block = st.checkbox("Include Block factor?", value=True)
             if has_block:
                 blocks = st.number_input("Number of blocks", min_value=2, max_value=5, value=2)
             else:
@@ -238,24 +193,20 @@ def load_factorial():
                 st.session_state.fact_names = {'FactorA': name_a, 'FactorB': name_b}
                 st.session_state.factorial_loaded = True
                 st.rerun()
-        return st.session_state.factorial_df
 
 def analyze_factorial(df, alpha, name_a, name_b):
-    # Prepare data
     if 'Block' not in df.columns:
         df['Block'] = 'All'
     df['FactorA'] = df['FactorA'].astype(str)
     df['FactorB'] = df['FactorB'].astype(str)
     df['Block'] = df['Block'].astype(str)
 
-    # Type II ANOVA
     formula = 'Response ~ C(FactorB) + C(FactorA) + C(Block) + C(FactorA):C(FactorB)'
     model = ols(formula, data=df).fit()
     anova = sm.stats.anova_lm(model, typ=2)
     grand_mean = df['Response'].mean()
     ss_total = np.sum((df['Response'] - grand_mean)**2)
 
-    # Build table
     results = []
     for factor_key, factor_name in [('C(FactorB)', name_b), ('C(FactorA)', name_a),
                                     ('C(Block)', 'Block'), ('C(FactorA):C(FactorB)', f'{name_a} × {name_b}')]:
@@ -266,7 +217,6 @@ def analyze_factorial(df, alpha, name_a, name_b):
         p_val = anova.loc[factor_key, 'PR(>F)']
         eta = ss / ss_total
         results.append([factor_name, ss, df_f, ms, f_val, p_val, eta])
-    # Residuals
     ss_res = anova.loc['Residual', 'sum_sq']
     df_res = anova.loc['Residual', 'df']
     ms_res = ss_res / df_res
@@ -280,9 +230,8 @@ def analyze_factorial(df, alpha, name_a, name_b):
     st.subheader("ANOVA Table (Type II)")
     st.dataframe(anova_df, use_container_width=True)
 
-    # Plots
     st.subheader("Visualization")
-    # Factor A
+    # Factor A plot
     levels_a = sorted(df['FactorA'].unique())
     means_a, err_a = [], []
     for lev in levels_a:
@@ -296,7 +245,7 @@ def analyze_factorial(df, alpha, name_a, name_b):
     ax1.grid(axis='y', linestyle='--', alpha=0.7)
     st.pyplot(fig1)
 
-    # Factor B
+    # Factor B plot
     levels_b = sorted(df['FactorB'].unique())
     means_b, err_b = [], []
     for lev in levels_b:
@@ -310,7 +259,7 @@ def analyze_factorial(df, alpha, name_a, name_b):
     ax2.grid(axis='y', linestyle='--', alpha=0.7)
     st.pyplot(fig2)
 
-    # Interaction
+    # Interaction plot
     inter = df.groupby(['FactorA', 'FactorB'])['Response'].agg(list).reset_index()
     inter_means, inter_err = [], []
     for _, row in inter.iterrows():
@@ -329,7 +278,6 @@ def analyze_factorial(df, alpha, name_a, name_b):
     ax3.grid(True, linestyle='--', alpha=0.7)
     st.pyplot(fig3)
 
-    # Block means if more than one block
     if len(df['Block'].unique()) > 1:
         block_means = df.groupby('Block')['Response'].mean().round(3)
         st.subheader("Block Means")
@@ -363,29 +311,36 @@ def analyze_factorial(df, alpha, name_a, name_b):
 def load_rbd():
     if st.session_state.rbd_loaded and st.session_state.rbd_df is not None:
         st.success("✅ RBD data already loaded.")
-        return st.session_state.rbd_df
+        return
 
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload RBD Data")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="rbd_upload")
         if uploaded:
             try:
-                df_raw = pd.read_excel(uploaded, engine='openpyxl') if not uploaded.name.endswith('.csv') else pd.read_csv(uploaded)
+                if uploaded.name.endswith('.csv'):
+                    df_raw = pd.read_csv(uploaded)
+                else:
+                    df_raw = pd.read_excel(uploaded, engine='openpyxl')
             except Exception as e:
-                st.error(f"Error: {e}")
-                return None
+                st.error(f"Error reading file: {e}")
+                return
             st.write("Preview:")
             st.dataframe(df_raw.head())
-            df_mapped, _ = auto_rename_columns(df_raw, "ANOVA (F-test) - RBD")
-            required = ['Treatment', 'Block', 'Response']
-            if all(c in df_mapped.columns for c in required):
-                st.session_state.rbd_df = df_mapped[required].dropna()
+            # Expect columns: Treatment, Block, Response
+            if df_raw.shape[1] >= 3:
+                df = pd.DataFrame({
+                    'Treatment': df_raw.iloc[:,0].astype(str),
+                    'Block': df_raw.iloc[:,1].astype(str),
+                    'Response': pd.to_numeric(df_raw.iloc[:,2])
+                })
+                st.session_state.rbd_df = df.dropna()
                 st.session_state.rbd_loaded = True
                 st.rerun()
             else:
-                st.error("Missing columns. Expected: Treatment, Block, Response (or similar).")
-        return None
-    else:
+                st.error("Need at least 3 columns: Treatment, Block, Response")
+        return
+    else:  # Manual entry
         st.subheader("Manual RBD Entry")
         with st.form(key="rbd_manual"):
             t = st.number_input("Treatments", min_value=2, max_value=10, value=3)
@@ -410,7 +365,6 @@ def load_rbd():
                 st.session_state.rbd_df = pd.DataFrame(rows)
                 st.session_state.rbd_loaded = True
                 st.rerun()
-        return st.session_state.rbd_df
 
 def analyze_rbd(df, alpha):
     model = ols('Response ~ C(Treatment) + C(Block)', data=df).fit()
@@ -432,7 +386,6 @@ def analyze_rbd(df, alpha):
     block_means.plot(kind='bar', ax=axes[1], color='lightcoral')
     axes[1].set_title('Block Means')
     st.pyplot(fig)
-    # Conclusion
     p_treat = anova.loc['C(Treatment)', 'PR(>F)']
     p_block = anova.loc['C(Block)', 'PR(>F)']
     if p_treat < alpha:
@@ -449,17 +402,20 @@ def analyze_rbd(df, alpha):
 def load_two_groups():
     if st.session_state.twog_loaded and st.session_state.twog_df is not None:
         st.success("✅ Two-group data already loaded.")
-        return st.session_state.twog_df
+        return
 
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload Two Groups")
         uploaded = st.file_uploader("CSV/Excel (first two columns = groups)", type=['xlsx','csv'], key="twog_upload")
         if uploaded:
             try:
-                df_raw = pd.read_excel(uploaded, engine='openpyxl') if not uploaded.name.endswith('.csv') else pd.read_csv(uploaded)
+                if uploaded.name.endswith('.csv'):
+                    df_raw = pd.read_csv(uploaded)
+                else:
+                    df_raw = pd.read_excel(uploaded, engine='openpyxl')
             except Exception as e:
-                st.error(f"Error: {e}")
-                return None
+                st.error(f"Error reading file: {e}")
+                return
             if df_raw.shape[1] >= 2:
                 g1 = df_raw.iloc[:,0].dropna().values
                 g2 = df_raw.iloc[:,1].dropna().values
@@ -471,7 +427,7 @@ def load_two_groups():
                     st.rerun()
             else:
                 st.error("Need at least two columns")
-        return None
+        return
     else:
         st.subheader("Manual Two Groups")
         with st.form(key="twog_manual"):
@@ -486,7 +442,6 @@ def load_two_groups():
                     st.rerun()
                 except:
                     st.error("Invalid numbers")
-        return st.session_state.twog_df
 
 def analyze_two_groups(df, test_type, alpha):
     g1 = df[df['Group']=='G1']['Value'].values
@@ -509,7 +464,6 @@ def analyze_two_groups(df, test_type, alpha):
         st.error("Reject H0: Significant difference.")
     else:
         st.success("Fail to reject H0: No significant difference.")
-    # Boxplot
     fig, ax = plt.subplots()
     ax.boxplot([g1, g2], labels=['Group 1', 'Group 2'])
     ax.set_ylabel('Value')
@@ -523,17 +477,20 @@ def analyze_two_groups(df, test_type, alpha):
 def load_tukey():
     if st.session_state.tukey_loaded and st.session_state.tukey_df is not None:
         st.success("✅ Tukey data already loaded.")
-        return st.session_state.tukey_df
+        return
 
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload Tukey Data (each column = group)")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="tukey_upload")
         if uploaded:
             try:
-                df_raw = pd.read_excel(uploaded, engine='openpyxl') if not uploaded.name.endswith('.csv') else pd.read_csv(uploaded)
+                if uploaded.name.endswith('.csv'):
+                    df_raw = pd.read_csv(uploaded)
+                else:
+                    df_raw = pd.read_excel(uploaded, engine='openpyxl')
             except Exception as e:
-                st.error(f"Error: {e}")
-                return None
+                st.error(f"Error reading file: {e}")
+                return
             st.dataframe(df_raw)
             if st.button("✅ Save Data"):
                 values, labels = [], []
@@ -544,7 +501,7 @@ def load_tukey():
                 st.session_state.tukey_df = pd.DataFrame({'Group': labels, 'Value': values})
                 st.session_state.tukey_loaded = True
                 st.rerun()
-        return None
+        return
     else:
         st.subheader("Manual Tukey")
         with st.form(key="tukey_manual"):
@@ -563,7 +520,6 @@ def load_tukey():
                     st.rerun()
                 except:
                     st.error("Parse error")
-        return st.session_state.tukey_df
 
 def analyze_tukey(df, alpha):
     tukey = pairwise_tukeyhsd(df['Value'], df['Group'], alpha=alpha)
@@ -575,7 +531,7 @@ def analyze_tukey(df, alpha):
     st.success("Analysis complete!")
 
 # ------------------------------------------------------------------
-# Main: load data and run analysis based on test type
+# Main: Load data and run analysis based on test type
 # ------------------------------------------------------------------
 if st.session_state.test_type == "Two-Way Factorial ANOVA with Blocking":
     load_factorial()
