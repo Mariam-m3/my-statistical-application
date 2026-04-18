@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -22,16 +21,15 @@ st.title("📊 Multi-Test Statistical Analysis Suite")
 st.markdown("### *ANOVA (RBD) | t-test | Z-test | Tukey | Factorial ANOVA with Blocking*")
 st.markdown("---")
 
-# Session state initialization
+# Session state
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'analysis_done' not in st.session_state:
     st.session_state.analysis_done = False
 
-# Sidebar with student and supervisor info
+# Sidebar
 with st.sidebar:
     st.header("⚙️ Settings")
-    
     st.markdown("---")
     st.markdown("**👩‍🎓 Mariam Muhsen Hussein**")
     st.markdown("*Master student – Advanced Manufacturing System Engineering*")
@@ -56,10 +54,9 @@ with st.sidebar:
         st.session_state.data_loaded = False
         st.rerun()
 
-# ============================================================
-# Data loading functions (with missing value handling)
-# ============================================================
-
+# --------------------------------------------------------------
+# Load RBD data
+# --------------------------------------------------------------
 def load_rbd():
     if data_source == "✏️ Manual entry":
         st.subheader("Manual Data Entry for RBD")
@@ -125,6 +122,9 @@ def load_rbd():
                 st.error("Missing columns: Treatment, Block, Response")
         return None
 
+# --------------------------------------------------------------
+# Load two groups data (t-test / Z-test)
+# --------------------------------------------------------------
 def load_two_groups():
     if data_source == "✏️ Manual entry":
         st.subheader("Manual Data Entry for Two Groups")
@@ -165,6 +165,9 @@ def load_two_groups():
                 st.error("Need at least two columns.")
         return None
 
+# --------------------------------------------------------------
+# Load Tukey data
+# --------------------------------------------------------------
 def load_tukey():
     if data_source == "✏️ Manual entry":
         st.subheader("Manual Data Entry for Tukey HSD")
@@ -207,6 +210,9 @@ def load_tukey():
                 st.rerun()
         return None
 
+# --------------------------------------------------------------
+# Load Factorial data (Two-Way ANOVA with Blocking) - CORRECTED
+# --------------------------------------------------------------
 def load_factorial():
     if data_source == "✏️ Manual entry":
         st.subheader("Two-Way Factorial ANOVA with Blocking")
@@ -266,7 +272,7 @@ def load_factorial():
         return st.session_state.get('factorial_df', None)
     else:
         st.subheader("Upload Factorial Data")
-        st.info("File should contain columns: Block, FactorA, FactorB, Response (names can be flexible, e.g., 'Cutting Speed', 'Coolant', 'Surface Roughness (µm)')")
+        st.info("File should contain columns: Block, FactorA, FactorB, Response (names can be flexible, e.g. 'Cutting Speed', 'Coolant', 'Surface Roughness (µm)')")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="fact_upload")
         if uploaded:
             try:
@@ -281,55 +287,59 @@ def load_factorial():
             st.write("Data preview (original column names):")
             st.dataframe(df.head())
 
-            # Flexible column mapping
-            col_mapping = {}
+            # تعيين الأعمدة الأصلية إلى الأسماء القياسية (original -> new)
+            # نبني قاموساً يكون مفتاحه الاسم الأصلي وقيمته الاسم الجديد
+            rename_dict = {}
             # Block
             if 'Block' in df.columns:
-                col_mapping['Block'] = 'Block'
+                rename_dict['Block'] = 'Block'
             elif 'block' in df.columns:
-                col_mapping['Block'] = 'block'
+                rename_dict['block'] = 'Block'
             # Factor A (Cutting Speed)
-            if 'FactorA' in df.columns:
-                col_mapping['FactorA'] = 'FactorA'
-            elif 'Cutting Speed' in df.columns:
-                col_mapping['FactorA'] = 'Cutting Speed'
+            if 'Cutting Speed' in df.columns:
+                rename_dict['Cutting Speed'] = 'FactorA'
+            elif 'FactorA' in df.columns:
+                rename_dict['FactorA'] = 'FactorA'
             elif 'Speed' in df.columns:
-                col_mapping['FactorA'] = 'Speed'
+                rename_dict['Speed'] = 'FactorA'
             elif 'factorA' in df.columns:
-                col_mapping['FactorA'] = 'factorA'
+                rename_dict['factorA'] = 'FactorA'
             # Factor B (Coolant)
-            if 'FactorB' in df.columns:
-                col_mapping['FactorB'] = 'FactorB'
-            elif 'Coolant' in df.columns:
-                col_mapping['FactorB'] = 'Coolant'
+            if 'Coolant' in df.columns:
+                rename_dict['Coolant'] = 'FactorB'
+            elif 'FactorB' in df.columns:
+                rename_dict['FactorB'] = 'FactorB'
             elif 'factorB' in df.columns:
-                col_mapping['FactorB'] = 'factorB'
-            # Response (Surface Roughness)
-            if 'Response' in df.columns:
-                col_mapping['Response'] = 'Response'
-            elif 'Surface Roughness (µm)' in df.columns:
-                col_mapping['Response'] = 'Surface Roughness (µm)'
+                rename_dict['factorB'] = 'FactorB'
+            # Response
+            if 'Surface Roughness (µm)' in df.columns:
+                rename_dict['Surface Roughness (µm)'] = 'Response'
+            elif 'Response' in df.columns:
+                rename_dict['Response'] = 'Response'
             elif 'Roughness' in df.columns:
-                col_mapping['Response'] = 'Roughness'
+                rename_dict['Roughness'] = 'Response'
             elif 'response' in df.columns:
-                col_mapping['Response'] = 'response'
+                rename_dict['response'] = 'Response'
 
-            if len(col_mapping) == 4:
-                df_renamed = df.rename(columns=col_mapping)
+            # التحقق من وجود الأعمدة الأربعة المطلوبة بعد إعادة التسمية
+            df_renamed = df.rename(columns=rename_dict)
+            required = ['Block', 'FactorA', 'FactorB', 'Response']
+            missing = [col for col in required if col not in df_renamed.columns]
+            if not missing:
                 st.success("Columns automatically mapped!")
                 st.write("Renamed data preview (first 5 rows):")
-                st.dataframe(df_renamed[['Block', 'FactorA', 'FactorB', 'Response']].head())
+                st.dataframe(df_renamed[required].head())
                 if st.button("✅ Save Uploaded Data"):
-                    st.session_state.factorial_df = df_renamed[['Block', 'FactorA', 'FactorB', 'Response']].dropna()
+                    st.session_state.factorial_df = df_renamed[required].dropna()
                     st.session_state.data_loaded = True
                     st.rerun()
             else:
-                st.error(f"Could not find required columns. Found: {list(df.columns)}. Expected: Block, FactorA, FactorB, Response or similar (Cutting Speed, Coolant, Surface Roughness (µm)).")
+                st.error(f"Could not find required columns after mapping. Missing: {missing}. Found columns: {list(df_renamed.columns)}. Please ensure your file contains appropriate column names.")
         return None
 
-# ============================================================
+# --------------------------------------------------------------
 # Load data based on test type
-# ============================================================
+# --------------------------------------------------------------
 if test_type == "ANOVA (F-test) - RBD":
     load_rbd()
 elif test_type in ["Two-Sample t-test", "Two-Sample Z-test"]:
@@ -339,9 +349,9 @@ elif test_type == "Tukey HSD (Post-hoc)":
 elif test_type == "Two-Way Factorial ANOVA with Blocking":
     load_factorial()
 
-# ============================================================
+# --------------------------------------------------------------
 # Analysis button
-# ============================================================
+# --------------------------------------------------------------
 if st.button("🔬 Run Analysis", type="primary"):
     if not st.session_state.data_loaded:
         st.error("Please load data first using the 'Save Data' button.")
