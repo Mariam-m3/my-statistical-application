@@ -337,7 +337,7 @@ if st.button("🔬 Run Analysis", type="primary"):
             m, ci = mean_ci(df[df['FactorB']==lev]['Response'].values)
             means_b.append(m); err_b.append(ci)
 
-        # Interaction
+        # Interaction data
         inter = df.groupby(['FactorA', 'FactorB'])['Response'].agg(list).reset_index()
         inter_means, inter_err = [], []
         for _, row in inter.iterrows():
@@ -346,42 +346,45 @@ if st.button("🔬 Run Analysis", type="primary"):
         inter['mean'] = inter_means
         inter['err'] = inter_err
 
-        fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-        # Main effect of Factor A
-        axes[0].bar(levels_a, means_a, yerr=err_a, capsize=5, color=['skyblue','steelblue'], edgecolor='black')
-        axes[0].set_ylabel('Mean Response')
-        axes[0].set_title('Effect of Factor A (95% CI)')
-        axes[0].grid(axis='y', linestyle='--', alpha=0.7)
+        # Plot 1: Effect of Cutting Speed
+        fig1, ax1 = plt.subplots(figsize=(6,4))
+        ax1.bar(levels_a, means_a, yerr=err_a, capsize=5, color=['skyblue','steelblue'], edgecolor='black')
+        ax1.set_ylabel('Mean Surface Roughness (µm)')
+        ax1.set_title('Effect of Cutting Speed (95% CI)')
+        ax1.grid(axis='y', linestyle='--', alpha=0.7)
+        st.pyplot(fig1)
 
-        # Main effect of Factor B
-        axes[1].bar(levels_b, means_b, yerr=err_b, capsize=5, color=['lightcoral','darkred'], edgecolor='black')
-        axes[1].set_ylabel('Mean Response')
-        axes[1].set_title('Effect of Factor B (95% CI)')
-        axes[1].grid(axis='y', linestyle='--', alpha=0.7)
+        # Plot 2: Effect of Coolant
+        fig2, ax2 = plt.subplots(figsize=(6,4))
+        ax2.bar(levels_b, means_b, yerr=err_b, capsize=5, color=['lightcoral','darkred'], edgecolor='black')
+        ax2.set_ylabel('Mean Surface Roughness (µm)')
+        ax2.set_title('Effect of Coolant (95% CI)')
+        ax2.grid(axis='y', linestyle='--', alpha=0.7)
+        st.pyplot(fig2)
 
-        # Interaction plot
-        for b in levels_b:
-            sub = inter[inter['FactorB']==b]
-            axes[2].errorbar(sub['FactorA'], sub['mean'], yerr=sub['err'], marker='o', label=b, capsize=5, linewidth=2)
-        axes[2].set_xlabel('Factor A')
-        axes[2].set_ylabel('Mean Response')
-        axes[2].set_title('Interaction Plot (95% CI)')
-        axes[2].legend()
-        axes[2].grid(True, linestyle='--', alpha=0.7)
-
-        plt.tight_layout()
-        st.pyplot(fig)
+        # Plot 3: Interaction Plot
+        fig3, ax3 = plt.subplots(figsize=(6,4))
+        for coolant in levels_b:
+            sub = inter[inter['FactorB'] == coolant]
+            ax3.errorbar(sub['FactorA'], sub['mean'], yerr=sub['err'],
+                         marker='o', label=coolant, capsize=5, linewidth=2)
+        ax3.set_xlabel('Cutting Speed')
+        ax3.set_ylabel('Mean Surface Roughness (µm)')
+        ax3.set_title('Interaction Plot (95% CI)')
+        ax3.legend(title='Coolant')
+        ax3.grid(True, linestyle='--', alpha=0.7)
+        st.pyplot(fig3)
 
         # Block means (optional)
         block_means = df.groupby('Block')['Response'].mean().round(3)
         st.subheader("Block Means")
         st.dataframe(pd.DataFrame(block_means))
-        fig2, ax = plt.subplots(figsize=(6,4))
-        block_means.plot(kind='bar', color='lightgreen', edgecolor='black', ax=ax)
-        ax.set_title('Mean Response by Block')
-        ax.set_ylabel('Mean Response')
-        ax.grid(axis='y', linestyle='--', alpha=0.7)
-        st.pyplot(fig2)
+        fig4, ax4 = plt.subplots(figsize=(6,4))
+        block_means.plot(kind='bar', color='lightgreen', edgecolor='black', ax=ax4)
+        ax4.set_title('Mean Response by Block')
+        ax4.set_ylabel('Mean Response')
+        ax4.grid(axis='y', linestyle='--', alpha=0.7)
+        st.pyplot(fig4)
 
         # Statistical conclusion
         p_a = anova.loc['C(FactorA)', 'PR(>F)']
@@ -463,4 +466,4 @@ if st.button("🔬 Run Analysis", type="primary"):
     st.success("✅ Analysis complete!")
 
 st.markdown("---")
-st.caption("Multi-Test Statistical Analysis Suite | Accurate Type II ANOVA | Generic for any dataset")
+st.caption("Multi-Test Statistical Analysis Suite | Accurate Type II ANOVA | Interaction Plot included")
