@@ -54,10 +54,9 @@ with st.sidebar:
         st.session_state.data_loaded = False
         st.rerun()
 
-# ============================================================
-# Data loading functions
-# ============================================================
-
+# ------------------------------------------------------------------
+# Data loading functions (generic)
+# ------------------------------------------------------------------
 def load_factorial():
     if st.session_state.factorial_df is not None and st.session_state.data_loaded:
         st.success("✅ Data already loaded. You can now run the analysis.")
@@ -65,7 +64,7 @@ def load_factorial():
 
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload Factorial Data")
-        st.info("File must contain columns: Block, FactorA, FactorB, Response (e.g., 'Block', 'Cutting Speed', 'Coolant', 'Surface Roughness (µm)')")
+        st.info("File must contain columns related to: Block, FactorA, FactorB, Response (e.g., 'Block', 'Cutting Speed', 'Coolant', 'Surface Roughness')")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx', 'csv'], key="fact_upload")
         if uploaded:
             try:
@@ -80,7 +79,7 @@ def load_factorial():
             st.write("Data preview:")
             st.dataframe(df.head())
 
-            # Flexible column mapping
+            # Automatic column mapping
             rename = {}
             for col in df.columns:
                 col_low = col.lower()
@@ -100,7 +99,7 @@ def load_factorial():
                 st.session_state.data_loaded = True
                 st.rerun()
             else:
-                st.error(f"Missing columns. Found: {list(df.columns)}. Expected: Block, FactorA, FactorB, Response or similar.")
+                st.error(f"Missing required columns. Found: {list(df.columns)}. Expected: Block, FactorA, FactorB, Response (or similar names).")
         return None
     else:
         st.subheader("Manual Entry for Factorial ANOVA")
@@ -251,9 +250,9 @@ def load_tukey():
                     st.error("Parse error")
         return st.session_state.tukey_df
 
-# ============================================================
-# Load based on test type
-# ============================================================
+# ------------------------------------------------------------------
+# Load data based on test type
+# ------------------------------------------------------------------
 if test_type == "Two-Way Factorial ANOVA with Blocking":
     load_factorial()
 elif test_type == "ANOVA (F-test) - RBD":
@@ -263,94 +262,81 @@ elif test_type in ["Two-Sample t-test", "Two-Sample Z-test"]:
 elif test_type == "Tukey HSD (Post-hoc)":
     load_tukey()
 
-# ============================================================
-# Analysis button
-# ============================================================
+# ------------------------------------------------------------------
+# Analysis
+# ------------------------------------------------------------------
 if st.button("🔬 Run Analysis", type="primary"):
     if not st.session_state.data_loaded:
         st.error("Please load data first using the 'Save Data' button.")
         st.stop()
 
+    # ---------- Factorial ANOVA with Blocking ----------
     if test_type == "Two-Way Factorial ANOVA with Blocking":
         df = st.session_state.factorial_df
-        # Calculate Type II ANOVA
+
+        # Type II ANOVA
         model = ols('Response ~ C(FactorB) + C(FactorA) + C(Block) + C(FactorA):C(FactorB)', data=df).fit()
         anova = sm.stats.anova_lm(model, typ=2)
+
         grand_mean = df['Response'].mean()
         ss_total = np.sum((df['Response'] - grand_mean)**2)
-        
-        # Build results table matching JAMOVI
-        res_data = []
-        # Coolant
-        ss_b = anova.loc['C(FactorB)', 'sum_sq']
-        df_b = anova.loc['C(FactorB)', 'df']
-        ms_b = ss_b / df_b
-        f_b = anova.loc['C(FactorB)', 'F']
-        p_b = anova.loc['C(FactorB)', 'PR(>F)']
-        eta_b = ss_b / ss_total
-        res_data.append(['Coolant', ss_b, df_b, ms_b, f_b, p_b, eta_b])
-        # Cutting Speed
-        ss_a = anova.loc['C(FactorA)', 'sum_sq']
-        df_a = anova.loc['C(FactorA)', 'df']
-        ms_a = ss_a / df_a
-        f_a = anova.loc['C(FactorA)', 'F']
-        p_a = anova.loc['C(FactorA)', 'PR(>F)']
-        eta_a = ss_a / ss_total
-        res_data.append(['Cutting Speed', ss_a, df_a, ms_a, f_a, p_a, eta_a])
-        # Block
-        ss_block = anova.loc['C(Block)', 'sum_sq']
-        df_block = anova.loc['C(Block)', 'df']
-        ms_block = ss_block / df_block
-        f_block = anova.loc['C(Block)', 'F']
-        p_block = anova.loc['C(Block)', 'PR(>F)']
-        eta_block = ss_block / ss_total
-        res_data.append(['Block', ss_block, df_block, ms_block, f_block, p_block, eta_block])
-        # Interaction
-        ss_int = anova.loc['C(FactorA):C(FactorB)', 'sum_sq']
-        df_int = anova.loc['C(FactorA):C(FactorB)', 'df']
-        ms_int = ss_int / df_int
-        f_int = anova.loc['C(FactorA):C(FactorB)', 'F']
-        p_int = anova.loc['C(FactorA):C(FactorB)', 'PR(>F)']
-        eta_int = ss_int / ss_total
-        res_data.append(['Coolant × Cutting Speed', ss_int, df_int, ms_int, f_int, p_int, eta_int])
-        # Residual
+
+        # Build results table
+        results = []
+        for name, key in [('Coolant', 'C(FactorB)'),
+                          ('Cutting Speed', 'C(FactorA)'),
+                          ('Block', 'C(Block)'),
+                          ('Coolant × Cutting Speed', 'C(FactorA):C(FactorB)')]:
+            ss = anova.loc[key, 'sum_sq']
+            df_f = anova.loc[key, 'df']
+            ms = ss / df_f
+            f_val = anova.loc[key, 'F']
+            p_val = anova.loc[key, 'PR(>F)']
+            eta = ss / ss_total
+            results.append([name, ss, df_f, ms, f_val, p_val, eta])
+        # Residuals
         ss_res = anova.loc['Residual', 'sum_sq']
         df_res = anova.loc['Residual', 'df']
         ms_res = ss_res / df_res
-        res_data.append(['Residuals', ss_res, df_res, ms_res, '', '', ''])
-        
-        anova_df = pd.DataFrame(res_data, columns=['Factor', 'Sum of Squares', 'df', 'Mean Square', 'F', 'p-value', 'η²'])
+        results.append(['Residuals', ss_res, df_res, ms_res, '', '', ''])
+
+        anova_df = pd.DataFrame(results, columns=['Factor', 'Sum of Squares', 'df', 'Mean Square', 'F', 'p-value', 'η²'])
         for col in ['Sum of Squares', 'Mean Square', 'F', 'η²']:
             anova_df[col] = anova_df[col].apply(lambda x: round(x, 5) if isinstance(x, (int, float)) else x)
         anova_df['p-value'] = anova_df['p-value'].apply(lambda x: round(x, 5) if isinstance(x, (int, float)) else x)
-        
+
         st.subheader("ANOVA Table (Type II)")
         st.dataframe(anova_df, use_container_width=True)
-        
-        # Plots with 95% CI
+
+        # -------------------------------
+        # Plots with 95% Confidence Intervals
+        # -------------------------------
         st.subheader("Visualization")
+
         def mean_ci(vals):
             m = np.mean(vals)
             n = len(vals)
             if n > 1:
                 sem = stats.sem(vals)
-                ci = sem * stats.t.ppf(0.975, n-1)
+                ci_half = sem * stats.t.ppf(0.975, n-1)
             else:
-                ci = 0
-            return m, ci
-        
-        # Factor A
-        a_levels = sorted(df['FactorA'].unique())
-        a_means, a_err = [], []
-        for lev in a_levels:
+                ci_half = 0
+            return m, ci_half
+
+        # Factor A (Cutting Speed)
+        levels_a = sorted(df['FactorA'].unique())
+        means_a, err_a = [], []
+        for lev in levels_a:
             m, ci = mean_ci(df[df['FactorA']==lev]['Response'].values)
-            a_means.append(m); a_err.append(ci)
-        # Factor B
-        b_levels = sorted(df['FactorB'].unique())
-        b_means, b_err = [], []
-        for lev in b_levels:
+            means_a.append(m); err_a.append(ci)
+
+        # Factor B (Coolant)
+        levels_b = sorted(df['FactorB'].unique())
+        means_b, err_b = [], []
+        for lev in levels_b:
             m, ci = mean_ci(df[df['FactorB']==lev]['Response'].values)
-            b_means.append(m); b_err.append(ci)
+            means_b.append(m); err_b.append(ci)
+
         # Interaction
         inter = df.groupby(['FactorA', 'FactorB'])['Response'].agg(list).reset_index()
         inter_means, inter_err = [], []
@@ -359,50 +345,61 @@ if st.button("🔬 Run Analysis", type="primary"):
             inter_means.append(m); inter_err.append(ci)
         inter['mean'] = inter_means
         inter['err'] = inter_err
-        
+
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-        axes[0].bar(a_levels, a_means, yerr=a_err, capsize=5, color=['skyblue','steelblue'])
-        axes[0].set_ylabel('Mean Surface Roughness (µm)')
-        axes[0].set_title('Effect of Cutting Speed (95% CI)')
+        # Main effect of Factor A
+        axes[0].bar(levels_a, means_a, yerr=err_a, capsize=5, color=['skyblue','steelblue'], edgecolor='black')
+        axes[0].set_ylabel('Mean Response')
+        axes[0].set_title('Effect of Factor A (95% CI)')
         axes[0].grid(axis='y', linestyle='--', alpha=0.7)
-        axes[1].bar(b_levels, b_means, yerr=b_err, capsize=5, color=['lightcoral','darkred'])
-        axes[1].set_ylabel('Mean Surface Roughness (µm)')
-        axes[1].set_title('Effect of Coolant (95% CI)')
+
+        # Main effect of Factor B
+        axes[1].bar(levels_b, means_b, yerr=err_b, capsize=5, color=['lightcoral','darkred'], edgecolor='black')
+        axes[1].set_ylabel('Mean Response')
+        axes[1].set_title('Effect of Factor B (95% CI)')
         axes[1].grid(axis='y', linestyle='--', alpha=0.7)
-        for coolant in b_levels:
-            sub = inter[inter['FactorB']==coolant]
-            axes[2].errorbar(sub['FactorA'], sub['mean'], yerr=sub['err'], marker='o', label=coolant, capsize=5, linewidth=2)
-        axes[2].set_xlabel('Cutting Speed')
-        axes[2].set_ylabel('Mean Surface Roughness (µm)')
+
+        # Interaction plot
+        for b in levels_b:
+            sub = inter[inter['FactorB']==b]
+            axes[2].errorbar(sub['FactorA'], sub['mean'], yerr=sub['err'], marker='o', label=b, capsize=5, linewidth=2)
+        axes[2].set_xlabel('Factor A')
+        axes[2].set_ylabel('Mean Response')
         axes[2].set_title('Interaction Plot (95% CI)')
         axes[2].legend()
         axes[2].grid(True, linestyle='--', alpha=0.7)
+
         plt.tight_layout()
         st.pyplot(fig)
-        
-        # Block means
+
+        # Block means (optional)
         block_means = df.groupby('Block')['Response'].mean().round(3)
         st.subheader("Block Means")
         st.dataframe(pd.DataFrame(block_means))
         fig2, ax = plt.subplots(figsize=(6,4))
         block_means.plot(kind='bar', color='lightgreen', edgecolor='black', ax=ax)
-        ax.set_title('Mean Surface Roughness by Time of Day')
-        ax.set_ylabel('Roughness (µm)')
+        ax.set_title('Mean Response by Block')
+        ax.set_ylabel('Mean Response')
         ax.grid(axis='y', linestyle='--', alpha=0.7)
         st.pyplot(fig2)
-        
-        # Conclusion
-        st.subheader("Statistical Conclusion")
-        if p_b < alpha:
-            st.write(f"✅ **Coolant** has a significant effect (p = {p_b:.4f}) – Wet coolant gives lower roughness.")
-        if p_a < alpha:
-            st.write(f"✅ **Cutting Speed** has a significant effect (p = {p_a:.4f}) – High speed gives lower roughness.")
-        if p_block < alpha:
-            st.write(f"⚠️ **Time of Day (Block)** has a significant effect (p = {p_block:.4f}).")
-        if p_int >= alpha:
-            st.write(f"❌ **Interaction** is not significant (p = {p_int:.4f}) – The effect of coolant is consistent across speeds.")
-        st.success("✅ Analysis complete!")
 
+        # Statistical conclusion
+        p_a = anova.loc['C(FactorA)', 'PR(>F)']
+        p_b = anova.loc['C(FactorB)', 'PR(>F)']
+        p_block = anova.loc['C(Block)', 'PR(>F)']
+        p_int = anova.loc['C(FactorA):C(FactorB)', 'PR(>F)']
+        st.subheader("Conclusion")
+        if p_b < alpha:
+            st.write(f"✅ **Factor B** has a significant effect (p = {p_b:.4f})")
+        if p_a < alpha:
+            st.write(f"✅ **Factor A** has a significant effect (p = {p_a:.4f})")
+        if p_block < alpha:
+            st.write(f"⚠️ **Block** has a significant effect (p = {p_block:.4f})")
+        if p_int >= alpha:
+            st.write(f"❌ **Interaction** is not significant (p = {p_int:.4f}) – factors act independently.")
+        st.success("Analysis complete!")
+
+    # ---------- RBD ANOVA ----------
     elif test_type == "ANOVA (F-test) - RBD":
         df = st.session_state.rbd_df
         model = ols('Response ~ C(Treatment) + C(Block)', data=df).fit()
@@ -423,6 +420,7 @@ if st.button("🔬 Run Analysis", type="primary"):
         block_means.plot(kind='bar', ax=ax[1], color='lightcoral')
         st.pyplot(fig)
 
+    # ---------- Two-Sample t-test ----------
     elif test_type == "Two-Sample t-test":
         df = st.session_state.twog_df
         g1 = df[df['Group']=='G1']['Value'].values
@@ -437,6 +435,7 @@ if st.button("🔬 Run Analysis", type="primary"):
         else:
             st.success("Fail to reject H0: No significant difference.")
 
+    # ---------- Two-Sample Z-test ----------
     elif test_type == "Two-Sample Z-test":
         df = st.session_state.twog_df
         g1 = df[df['Group']=='G1']['Value'].values
@@ -451,6 +450,7 @@ if st.button("🔬 Run Analysis", type="primary"):
         else:
             st.success("Fail to reject H0: No significant difference.")
 
+    # ---------- Tukey HSD ----------
     elif test_type == "Tukey HSD (Post-hoc)":
         df = st.session_state.tukey_df
         tukey = pairwise_tukeyhsd(df['Value'], df['Group'], alpha=alpha)
@@ -463,4 +463,4 @@ if st.button("🔬 Run Analysis", type="primary"):
     st.success("✅ Analysis complete!")
 
 st.markdown("---")
-st.caption("Multi-Test Statistical Analysis Suite | Accurate Type II ANOVA | Plots with 95% CI")
+st.caption("Multi-Test Statistical Analysis Suite | Accurate Type II ANOVA | Generic for any dataset")
