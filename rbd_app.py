@@ -6,6 +6,7 @@ from scipy import stats
 import statsmodels.api as sm
 from statsmodels.formula.api import ols
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
+import re
 
 st.set_page_config(page_title="Multi-Test Statistical Analysis Suite", page_icon="📊", layout="wide")
 
@@ -24,7 +25,7 @@ st.markdown("---")
 # Session state
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
-for key in ['rbd_df', 'twog_df', 'tukey_df', 'factorial_df']:
+for key in ['rbd_df', 'twog_df', 'tukey_df', 'factorial_df', 'custom_rename']:
     if key not in st.session_state:
         st.session_state[key] = None
 
@@ -49,13 +50,75 @@ with st.sidebar:
     data_source = st.radio("Data input method:", ["📂 Upload Excel/CSV", "✏️ Manual entry"])
     alpha = st.number_input("Significance level (α)", min_value=0.01, max_value=0.20, value=0.05, step=0.01)
     if st.button("🗑️ Clear Data"):
-        for key in ['rbd_df', 'twog_df', 'tukey_df', 'factorial_df']:
+        for key in ['rbd_df', 'twog_df', 'tukey_df', 'factorial_df', 'custom_rename']:
             st.session_state[key] = None
         st.session_state.data_loaded = False
         st.rerun()
 
 # ------------------------------------------------------------------
-# Data loading functions (generic)
+# Helper functions for flexible data handling
+# ------------------------------------------------------------------
+def auto_rename_columns(df):
+    """Automatically map columns to standard names based on keywords."""
+    mapping = {}
+    for col in df.columns:
+        col_low = col.lower().strip()
+        if re.search(r'block|batch|day|time', col_low):
+            mapping[col] = 'Block'
+        elif re.search(r'cutting|speed|factor\s*a|treatment|method', col_low):
+            mapping[col] = 'FactorA'
+        elif re.search(r'coolant|lubricant|fluid|factor\s*b', col_low):
+            mapping[col] = 'FactorB'
+        elif re.search(r'roughness|surface|response|value|result', col_low):
+            mapping[col] = 'Response'
+    # If no match, keep original but assign generic
+    for col in df.columns:
+        if col not in mapping:
+            if len(df.columns) == 3 and 'Block' not in mapping.values():
+                mapping[col] = 'Block'
+            elif len(df.columns) == 3 and 'FactorA' not in mapping.values():
+                mapping[col] = 'FactorA'
+            elif len(df.columns) == 3 and 'FactorB' not in mapping.values():
+                mapping[col] = 'FactorB'
+            elif len(df.columns) == 4 and 'Response' not in mapping.values():
+                mapping[col] = 'Response'
+    return df.rename(columns=mapping), mapping
+
+def melt_wide_factorial(df):
+    """Convert wide format (e.g., Dry/Wet columns) to long format."""
+    # Assume first column is FactorA levels, remaining columns are FactorB levels
+    factor_a_col = df.columns[0]
+    factor_b_levels = df.columns[1:]
+    melted = pd.melt(df, id_vars=[factor_a_col], var_name='FactorB', value_name='Response')
+    melted.rename(columns={factor_a_col: 'FactorA'}, inplace=True)
+    # Add a dummy Block if missing
+    if 'Block' not in melted.columns:
+        melted['Block'] = 'Block1'
+    return melted
+
+def ensure_long_format(df, test_type):
+    """Ensure data is in long format for factorial ANOVA."""
+    # If already has Block, FactorA, FactorB, Response -> fine
+    required = ['Block', 'FactorA', 'FactorB', 'Response']
+    if all(col in df.columns for col in required):
+        return df
+    # Try to map columns
+    df_mapped, _ = auto_rename_columns(df)
+    if all(col in df_mapped.columns for col in required):
+        return df_mapped
+    # If wide format (e.g., FactorA rows, FactorB columns)
+    if df.shape[1] >= 3 and df.shape[0] >= 2:
+        # Assume first column is FactorA levels, others are FactorB levels
+        try:
+            return melt_wide_factorial(df)
+        except:
+            pass
+    # If only two columns: FactorA and Response? Not enough.
+    st.error("Could not automatically parse data format. Please use long format with columns: Block, FactorA, FactorB, Response (or similar names).")
+    return None
+
+# ------------------------------------------------------------------
+# Data loading functions (generic, flexible)
 # ------------------------------------------------------------------
 def load_factorial():
     if st.session_state.factorial_df is not None and st.session_state.data_loaded:
@@ -64,65 +127,70 @@ def load_factorial():
 
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload Factorial Data")
-        st.info("File must contain columns related to: Block, FactorA, FactorB, Response (e.g., 'Block', 'Cutting Speed', 'Coolant', 'Surface Roughness')")
+        st.info("Accept any format (long or wide). For wide format, first column = Factor A levels, other columns = Factor B levels.")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx', 'csv'], key="fact_upload")
         if uploaded:
             try:
                 if uploaded.name.endswith('.csv'):
-                    df = pd.read_csv(uploaded)
+                    df_raw = pd.read_csv(uploaded)
                 else:
-                    df = pd.read_excel(uploaded, engine='openpyxl')
+                    df_raw = pd.read_excel(uploaded, engine='openpyxl')
             except Exception as e:
                 st.error(f"Error reading file: {e}")
                 return None
 
-            st.write("Data preview:")
-            st.dataframe(df.head())
+            st.write("Original data preview:")
+            st.dataframe(df_raw.head())
 
-            # Automatic column mapping
-            rename = {}
-            for col in df.columns:
-                col_low = col.lower()
-                if 'block' in col_low:
-                    rename[col] = 'Block'
-                elif 'cutting' in col_low or col_low == 'speed' or 'factor a' in col_low:
-                    rename[col] = 'FactorA'
-                elif 'coolant' in col_low or 'factor b' in col_low:
-                    rename[col] = 'FactorB'
-                elif 'roughness' in col_low or 'surface' in col_low or 'response' in col_low:
-                    rename[col] = 'Response'
-            df = df.rename(columns=rename)
-            required = ['Block', 'FactorA', 'FactorB', 'Response']
-            if all(c in df.columns for c in required):
-                st.success("Columns successfully mapped!")
-                st.session_state.factorial_df = df[required].dropna()
+            # Try to convert to long format
+            df_long = ensure_long_format(df_raw, 'factorial')
+            if df_long is not None:
+                st.success("Data successfully parsed!")
+                st.write("Parsed data (long format):")
+                st.dataframe(df_long.head())
+                st.session_state.factorial_df = df_long.dropna()
                 st.session_state.data_loaded = True
                 st.rerun()
             else:
-                st.error(f"Missing required columns. Found: {list(df.columns)}. Expected: Block, FactorA, FactorB, Response (or similar names).")
+                st.error("Could not parse data. Please ensure it contains columns for Block (optional), FactorA, FactorB, and Response.")
         return None
     else:
         st.subheader("Manual Entry for Factorial ANOVA")
         with st.form(key="fact_manual"):
             col1, col2, col3 = st.columns(3)
             with col1:
-                levels_a = st.number_input("Factor A levels", min_value=2, max_value=3, value=2)
+                levels_a = st.number_input("Factor A levels", min_value=2, max_value=5, value=2)
             with col2:
-                levels_b = st.number_input("Factor B levels", min_value=2, max_value=3, value=2)
+                levels_b = st.number_input("Factor B levels", min_value=2, max_value=5, value=2)
             with col3:
-                blocks = st.number_input("Number of blocks", min_value=2, max_value=3, value=2)
-            names_a = [st.text_input(f"A{i+1}", value=f"A{i+1}", key=f"fa_{i}") for i in range(int(levels_a))]
-            names_b = [st.text_input(f"B{j+1}", value=f"B{j+1}", key=f"fb_{j}") for j in range(int(levels_b))]
-            names_block = [st.text_input(f"Block{k+1}", value=f"Block{k+1}", key=f"fk_{k}") for k in range(int(blocks))]
+                has_block = st.checkbox("Include Block factor?", value=True)
+                if has_block:
+                    blocks = st.number_input("Number of blocks", min_value=2, max_value=5, value=2)
+                else:
+                    blocks = 1
+            names_a = [st.text_input(f"A{i+1}", value=f"Level A{i+1}", key=f"fa_{i}") for i in range(int(levels_a))]
+            names_b = [st.text_input(f"B{j+1}", value=f"Level B{j+1}", key=f"fb_{j}") for j in range(int(levels_b))]
+            if has_block:
+                names_block = [st.text_input(f"Block{k+1}", value=f"Block{k+1}", key=f"fk_{k}") for k in range(int(blocks))]
+            else:
+                names_block = ['Dummy']
+                blocks = 1
             rows = []
             for k in range(int(blocks)):
-                st.write(f"**{names_block[k]}**")
+                if has_block:
+                    st.write(f"**{names_block[k]}**")
                 for i in range(int(levels_a)):
                     for j in range(int(levels_b)):
                         val = st.number_input(f"{names_a[i]} × {names_b[j]}", value=10.0, key=f"fact_man_{k}_{i}_{j}", step=0.1)
-                        rows.append({'Block': names_block[k], 'FactorA': names_a[i], 'FactorB': names_b[j], 'Response': val})
+                        row = {'FactorA': names_a[i], 'FactorB': names_b[j], 'Response': val}
+                        if has_block:
+                            row['Block'] = names_block[k]
+                        else:
+                            row['Block'] = 'All'
+                        rows.append(row)
             if st.form_submit_button("✅ Save Data"):
-                st.session_state.factorial_df = pd.DataFrame(rows)
+                df = pd.DataFrame(rows)
+                st.session_state.factorial_df = df
                 st.session_state.data_loaded = True
                 st.rerun()
         return st.session_state.factorial_df
@@ -133,10 +201,21 @@ def load_rbd():
         return st.session_state.rbd_df
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload RBD Data")
-        st.info("File must have columns: Treatment, Block, Response")
+        st.info("File must have columns: Treatment, Block, Response (or similar names).")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="rbd_upload")
         if uploaded:
             df = pd.read_excel(uploaded, engine='openpyxl') if not uploaded.name.endswith('.csv') else pd.read_csv(uploaded)
+            # Try to map columns
+            rename = {}
+            for col in df.columns:
+                low = col.lower()
+                if re.search(r'treatment|method|group', low):
+                    rename[col] = 'Treatment'
+                elif re.search(r'block|batch|day', low):
+                    rename[col] = 'Block'
+                elif re.search(r'response|value|result', low):
+                    rename[col] = 'Response'
+            df = df.rename(columns=rename)
             if all(c in df.columns for c in ['Treatment', 'Block', 'Response']):
                 st.dataframe(df)
                 if st.button("✅ Save Data"):
@@ -144,7 +223,7 @@ def load_rbd():
                     st.session_state.data_loaded = True
                     st.rerun()
             else:
-                st.error("Missing columns: Treatment, Block, Response")
+                st.error("Missing columns. Expected: Treatment, Block, Response (or similar names).")
         return None
     else:
         st.subheader("Manual RBD Entry")
@@ -270,12 +349,20 @@ if st.button("🔬 Run Analysis", type="primary"):
         st.error("Please load data first using the 'Save Data' button.")
         st.stop()
 
-    # ---------- Factorial ANOVA with Blocking ----------
+    # ---------- Factorial ANOVA with Blocking (flexible) ----------
     if test_type == "Two-Way Factorial ANOVA with Blocking":
         df = st.session_state.factorial_df
+        # Ensure Block column exists; if not, create dummy
+        if 'Block' not in df.columns:
+            df['Block'] = 'All'
+        # Ensure FactorA and FactorB are categorical
+        df['FactorA'] = df['FactorA'].astype(str)
+        df['FactorB'] = df['FactorB'].astype(str)
+        df['Block'] = df['Block'].astype(str)
 
         # Type II ANOVA
-        model = ols('Response ~ C(FactorB) + C(FactorA) + C(Block) + C(FactorA):C(FactorB)', data=df).fit()
+        formula = 'Response ~ C(FactorB) + C(FactorA) + C(Block) + C(FactorA):C(FactorB)'
+        model = ols(formula, data=df).fit()
         anova = sm.stats.anova_lm(model, typ=2)
 
         grand_mean = df['Response'].mean()
@@ -283,10 +370,10 @@ if st.button("🔬 Run Analysis", type="primary"):
 
         # Build results table
         results = []
-        for name, key in [('Coolant', 'C(FactorB)'),
-                          ('Cutting Speed', 'C(FactorA)'),
+        for name, key in [('Factor B', 'C(FactorB)'),
+                          ('Factor A', 'C(FactorA)'),
                           ('Block', 'C(Block)'),
-                          ('Coolant × Cutting Speed', 'C(FactorA):C(FactorB)')]:
+                          ('Factor A × Factor B', 'C(FactorA):C(FactorB)')]:
             ss = anova.loc[key, 'sum_sq']
             df_f = anova.loc[key, 'df']
             ms = ss / df_f
@@ -323,14 +410,14 @@ if st.button("🔬 Run Analysis", type="primary"):
                 ci_half = 0
             return m, ci_half
 
-        # Factor A (Cutting Speed)
+        # Factor A means
         levels_a = sorted(df['FactorA'].unique())
         means_a, err_a = [], []
         for lev in levels_a:
             m, ci = mean_ci(df[df['FactorA']==lev]['Response'].values)
             means_a.append(m); err_a.append(ci)
 
-        # Factor B (Coolant)
+        # Factor B means
         levels_b = sorted(df['FactorB'].unique())
         means_b, err_b = [], []
         for lev in levels_b:
@@ -346,51 +433,52 @@ if st.button("🔬 Run Analysis", type="primary"):
         inter['mean'] = inter_means
         inter['err'] = inter_err
 
-        # Plot 1: Effect of Cutting Speed
+        # Plot 1: Factor A
         fig1, ax1 = plt.subplots(figsize=(6,4))
         ax1.bar(levels_a, means_a, yerr=err_a, capsize=5, color=['skyblue','steelblue'], edgecolor='black')
-        ax1.set_ylabel('Mean Surface Roughness (µm)')
-        ax1.set_title('Effect of Cutting Speed (95% CI)')
+        ax1.set_ylabel('Mean Response')
+        ax1.set_title('Effect of Factor A (95% CI)')
         ax1.grid(axis='y', linestyle='--', alpha=0.7)
         st.pyplot(fig1)
 
-        # Plot 2: Effect of Coolant
+        # Plot 2: Factor B
         fig2, ax2 = plt.subplots(figsize=(6,4))
         ax2.bar(levels_b, means_b, yerr=err_b, capsize=5, color=['lightcoral','darkred'], edgecolor='black')
-        ax2.set_ylabel('Mean Surface Roughness (µm)')
-        ax2.set_title('Effect of Coolant (95% CI)')
+        ax2.set_ylabel('Mean Response')
+        ax2.set_title('Effect of Factor B (95% CI)')
         ax2.grid(axis='y', linestyle='--', alpha=0.7)
         st.pyplot(fig2)
 
-        # Plot 3: Interaction Plot
+        # Plot 3: Interaction
         fig3, ax3 = plt.subplots(figsize=(6,4))
-        for coolant in levels_b:
-            sub = inter[inter['FactorB'] == coolant]
+        for b in levels_b:
+            sub = inter[inter['FactorB'] == b]
             ax3.errorbar(sub['FactorA'], sub['mean'], yerr=sub['err'],
-                         marker='o', label=coolant, capsize=5, linewidth=2)
-        ax3.set_xlabel('Cutting Speed')
-        ax3.set_ylabel('Mean Surface Roughness (µm)')
+                         marker='o', label=b, capsize=5, linewidth=2)
+        ax3.set_xlabel('Factor A')
+        ax3.set_ylabel('Mean Response')
         ax3.set_title('Interaction Plot (95% CI)')
-        ax3.legend(title='Coolant')
+        ax3.legend(title='Factor B')
         ax3.grid(True, linestyle='--', alpha=0.7)
         st.pyplot(fig3)
 
-        # Block means (optional)
-        block_means = df.groupby('Block')['Response'].mean().round(3)
-        st.subheader("Block Means")
-        st.dataframe(pd.DataFrame(block_means))
-        fig4, ax4 = plt.subplots(figsize=(6,4))
-        block_means.plot(kind='bar', color='lightgreen', edgecolor='black', ax=ax4)
-        ax4.set_title('Mean Response by Block')
-        ax4.set_ylabel('Mean Response')
-        ax4.grid(axis='y', linestyle='--', alpha=0.7)
-        st.pyplot(fig4)
+        # Block means (if more than one block)
+        if len(df['Block'].unique()) > 1:
+            block_means = df.groupby('Block')['Response'].mean().round(3)
+            st.subheader("Block Means")
+            st.dataframe(pd.DataFrame(block_means))
+            fig4, ax4 = plt.subplots(figsize=(6,4))
+            block_means.plot(kind='bar', color='lightgreen', edgecolor='black', ax=ax4)
+            ax4.set_title('Mean Response by Block')
+            ax4.set_ylabel('Mean Response')
+            ax4.grid(axis='y', linestyle='--', alpha=0.7)
+            st.pyplot(fig4)
 
-        # Statistical conclusion
-        p_a = anova.loc['C(FactorA)', 'PR(>F)']
-        p_b = anova.loc['C(FactorB)', 'PR(>F)']
-        p_block = anova.loc['C(Block)', 'PR(>F)']
-        p_int = anova.loc['C(FactorA):C(FactorB)', 'PR(>F)']
+        # Conclusion
+        p_a = anova.loc['C(FactorA)', 'PR(>F)'] if 'C(FactorA)' in anova.index else 1
+        p_b = anova.loc['C(FactorB)', 'PR(>F)'] if 'C(FactorB)' in anova.index else 1
+        p_block = anova.loc['C(Block)', 'PR(>F)'] if 'C(Block)' in anova.index else 1
+        p_int = anova.loc['C(FactorA):C(FactorB)', 'PR(>F)'] if 'C(FactorA):C(FactorB)' in anova.index else 1
         st.subheader("Conclusion")
         if p_b < alpha:
             st.write(f"✅ **Factor B** has a significant effect (p = {p_b:.4f})")
@@ -466,4 +554,4 @@ if st.button("🔬 Run Analysis", type="primary"):
     st.success("✅ Analysis complete!")
 
 st.markdown("---")
-st.caption("Multi-Test Statistical Analysis Suite | Accurate Type II ANOVA | Interaction Plot included")
+st.caption("Multi-Test Statistical Analysis Suite | Flexible input: wide/long formats, auto column mapping | Works with any dataset")
