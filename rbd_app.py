@@ -59,6 +59,11 @@ with st.sidebar:
 # Load Factorial data (Two-Way ANOVA with Blocking)
 # --------------------------------------------------------------
 def load_factorial():
+    # If data already loaded, just return it without showing upload UI
+    if st.session_state.get('factorial_df') is not None and st.session_state.data_loaded:
+        st.success("✅ Data already loaded. You can now run the analysis.")
+        return st.session_state.factorial_df
+
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload Factorial Data")
         st.info("File should contain columns: Block, FactorA, FactorB, Response (e.g. 'Block', 'Cutting Speed', 'Coolant', 'Surface Roughness (µm)')")
@@ -113,10 +118,10 @@ def load_factorial():
                 st.session_state.data_loaded = True
                 st.rerun()
             else:
-                st.error(f"Missing columns. Found: {list(df_renamed.columns)}. Expected: Block, FactorA, FactorB, Response or similar (Cutting Speed, Coolant, Surface Roughness).")
+                st.error(f"Missing columns. Found: {list(df_renamed.columns)}. Expected: Block, FactorA, FactorB, Response or similar.")
         return None
     else:
-        # Manual entry (simplified for factorial)
+        # Manual entry for factorial
         st.subheader("Manual Data Entry for Factorial ANOVA")
         with st.form(key="fact_manual"):
             col1, col2, col3 = st.columns(3)
@@ -163,7 +168,7 @@ def load_factorial():
         return st.session_state.get('factorial_df', None)
 
 # --------------------------------------------------------------
-# Load other test types (RBD, t-test, etc.) – keep as before
+# Load RBD data
 # --------------------------------------------------------------
 def load_rbd():
     if data_source == "📂 Upload Excel/CSV":
@@ -189,36 +194,50 @@ def load_rbd():
         with st.form(key="rbd_manual"):
             col1, col2 = st.columns(2)
             with col1:
-                t = st.number_input("Treatments", min_value=2, max_value=10, value=3)
+                t = st.number_input("Number of treatments", min_value=2, max_value=10, value=3)
             with col2:
-                b = st.number_input("Blocks", min_value=2, max_value=10, value=4)
-            treat_names = [st.text_input(f"T{i+1}", value=f"T{i+1}", key=f"treat_{i}") for i in range(int(t))]
-            block_names = [st.text_input(f"B{j+1}", value=f"B{j+1}", key=f"block_{j}") for j in range(int(b))]
+                b = st.number_input("Number of blocks", min_value=2, max_value=10, value=4)
+            treat_names = []
+            block_names = []
+            st.write("Treatment names:")
+            cols = st.columns(int(t))
+            for i in range(int(t)):
+                with cols[i]:
+                    name = st.text_input(f"T{i+1}", value=f"T{i+1}")
+                    treat_names.append(name)
+            st.write("Block names:")
+            cols = st.columns(int(b))
+            for j in range(int(b)):
+                with cols[j]:
+                    name = st.text_input(f"B{j+1}", value=f"B{j+1}")
+                    block_names.append(name)
             data_input = []
             for i in range(int(t)):
                 cols = st.columns(int(b))
                 row = []
                 for j in range(int(b)):
                     with cols[j]:
-                        val = st.number_input(f"{treat_names[i]},{block_names[j]}", value=10.0, key=f"rbd_man_{i}_{j}")
+                        val = st.number_input(f"{treat_names[i]}, {block_names[j]}", value=10.0, key=f"rbd_man_{i}_{j}", step=0.1)
                         row.append(val)
                 data_input.append(row)
             submitted = st.form_submit_button("✅ Save Data")
             if submitted:
-                Y = np.array(data_input)
+                Y = np.array(data_input, dtype=float)
                 rows = []
                 for i, tr in enumerate(treat_names):
                     for j, bl in enumerate(block_names):
-                        rows.append({'Treatment': tr, 'Block': bl, 'Response': Y[i,j]})
+                        rows.append({'Treatment': tr, 'Block': bl, 'Response': Y[i, j]})
                 st.session_state.rbd_df = pd.DataFrame(rows)
                 st.session_state.data_loaded = True
                 st.rerun()
         return st.session_state.get('rbd_df', None)
 
+# --------------------------------------------------------------
+# Load two groups data (t-test / Z-test)
+# --------------------------------------------------------------
 def load_two_groups():
-    # Simplified – same as before but using upload or manual
     if data_source == "📂 Upload Excel/CSV":
-        st.subheader("Upload Two Groups")
+        st.subheader("Upload Two Groups Data")
         uploaded = st.file_uploader("CSV/Excel (first two columns = groups)", type=['xlsx','csv'], key="twog_upload")
         if uploaded:
             if uploaded.name.endswith('.csv'):
@@ -228,32 +247,35 @@ def load_two_groups():
             if df.shape[1] >= 2:
                 g1 = df.iloc[:,0].dropna().values
                 g2 = df.iloc[:,1].dropna().values
-                long_df = pd.DataFrame({'Group': ['G1']*len(g1)+['G2']*len(g2), 'Value': np.concatenate([g1,g2])})
+                long_df = pd.DataFrame({'Group': ['G1']*len(g1) + ['G2']*len(g2), 'Value': np.concatenate([g1, g2])})
                 st.dataframe(long_df)
-                if st.button("✅ Save Data"):
+                if st.button("✅ Save Uploaded Data"):
                     st.session_state.twog_df = long_df
                     st.session_state.data_loaded = True
                     st.rerun()
             else:
-                st.error("Need two columns")
+                st.error("Need at least two columns.")
         return None
     else:
-        st.subheader("Manual Two Groups")
+        st.subheader("Manual Data Entry for Two Groups")
         with st.form(key="twog_manual"):
-            g1_str = st.text_area("Group1 values (comma separated)", "23,25,28")
-            g2_str = st.text_area("Group2 values (comma separated)", "19,21,24")
+            g1_str = st.text_area("Group 1 values (comma separated)", "23,25,28,22,26")
+            g2_str = st.text_area("Group 2 values (comma separated)", "19,21,24,20,22")
             submitted = st.form_submit_button("✅ Save Data")
             if submitted:
                 try:
                     g1 = np.array([float(x.strip()) for x in g1_str.split(',')])
                     g2 = np.array([float(x.strip()) for x in g2_str.split(',')])
-                    st.session_state.twog_df = pd.DataFrame({'Group': ['G1']*len(g1)+['G2']*len(g2), 'Value': np.concatenate([g1,g2])})
+                    st.session_state.twog_df = pd.DataFrame({'Group': ['G1']*len(g1) + ['G2']*len(g2), 'Value': np.concatenate([g1, g2])})
                     st.session_state.data_loaded = True
                     st.rerun()
                 except:
-                    st.error("Invalid numbers")
+                    st.error("Invalid numbers.")
         return st.session_state.get('twog_df', None)
 
+# --------------------------------------------------------------
+# Load Tukey data
+# --------------------------------------------------------------
 def load_tukey():
     if data_source == "📂 Upload Excel/CSV":
         st.subheader("Upload Tukey Data (each column = group)")
@@ -264,20 +286,21 @@ def load_tukey():
             else:
                 df = pd.read_excel(uploaded, engine='openpyxl')
             st.dataframe(df)
-            if st.button("✅ Save Data"):
+            if st.button("✅ Save Uploaded Data"):
                 values, labels = [], []
                 for col in df.columns:
                     vals = df[col].dropna().values
                     values.extend(vals)
-                    labels.extend([col]*len(vals))
+                    labels.extend([col] * len(vals))
                 st.session_state.tukey_df = pd.DataFrame({'Group': labels, 'Value': values})
                 st.session_state.data_loaded = True
                 st.rerun()
         return None
     else:
-        st.subheader("Manual Tukey")
+        st.subheader("Manual Data Entry for Tukey HSD")
+        st.write("One group per line: GroupName: val1,val2,...")
         with st.form(key="tukey_manual"):
-            text_input = st.text_area("Groups (one per line: Group: val1,val2)", "Group1: 23,25,28\nGroup2: 19,21,24")
+            text_input = st.text_area("Groups data", "Group1: 23,25,28\nGroup2: 19,21,24\nGroup3: 15,18,20")
             submitted = st.form_submit_button("✅ Save Data")
             if submitted:
                 values, labels = [], []
@@ -287,12 +310,12 @@ def load_tukey():
                             label, vals_str = line.split(':')
                             vals = [float(x.strip()) for x in vals_str.split(',')]
                             values.extend(vals)
-                            labels.extend([label.strip()]*len(vals))
+                            labels.extend([label.strip()] * len(vals))
                     st.session_state.tukey_df = pd.DataFrame({'Group': labels, 'Value': values})
                     st.session_state.data_loaded = True
                     st.rerun()
                 except:
-                    st.error("Parse error")
+                    st.error("Parse error.")
         return st.session_state.get('tukey_df', None)
 
 # --------------------------------------------------------------
@@ -308,7 +331,7 @@ elif test_type == "Tukey HSD (Post-hoc)":
     load_tukey()
 
 # --------------------------------------------------------------
-# Analysis and plotting
+# Analysis button
 # --------------------------------------------------------------
 if st.button("🔬 Run Analysis", type="primary"):
     if not st.session_state.data_loaded:
@@ -317,88 +340,71 @@ if st.button("🔬 Run Analysis", type="primary"):
 
     if test_type == "Two-Way Factorial ANOVA with Blocking":
         df = st.session_state.factorial_df
-        # Ensure correct ordering of factors to match JAMOVI sums of squares
-        # Put FactorB (Coolant) first to get SS = 0.28125, then FactorA = 0.15125
+        # Put FactorB first to match JAMOVI sums of squares
         model = ols('Response ~ C(FactorB) + C(FactorA) + C(Block) + C(FactorA):C(FactorB)', data=df).fit()
         anova_table = sm.stats.anova_lm(model, typ=3)
         st.markdown("---")
         st.header("📈 Two-Way Factorial ANOVA with Blocking")
         st.subheader("ANOVA Table (Type III Sum of Squares)")
-        # Display only relevant rows (exclude Intercept)
         anova_display = anova_table.drop(index='Intercept').round(4)
         st.dataframe(anova_display, use_container_width=True)
         
-        # Additional statistics: effect size (eta-squared)
+        # Effect size
         ss_total = anova_table['sum_sq'].sum()
         eta_squared = anova_table['sum_sq'] / ss_total
         st.subheader("Effect Size (η²)")
         st.dataframe(pd.DataFrame({'η²': eta_squared.round(4)}).drop(index='Intercept'))
 
-        # Means for plots
-        means_a = df.groupby('FactorA')['Response'].mean().reset_index()
-        means_b = df.groupby('FactorB')['Response'].mean().reset_index()
-        # For confidence intervals (95% CI) using standard error
+        # Means and confidence intervals
         def ci(data, col='Response'):
             mean = data[col].mean()
             sem = data[col].sem()
             ci95 = sem * stats.t.ppf((1+0.95)/2, len(data)-1)
             return mean, ci95
-        
-        # Prepare data for main effect plots
+
         a_levels = df['FactorA'].unique()
-        a_means = []
-        a_cis = []
+        a_means, a_cis = [], []
         for level in a_levels:
-            m, ci95 = ci(df[df['FactorA']==level])
-            a_means.append(m)
-            a_cis.append(ci95)
+            m, c = ci(df[df['FactorA']==level])
+            a_means.append(m); a_cis.append(c)
         
         b_levels = df['FactorB'].unique()
-        b_means = []
-        b_cis = []
+        b_means, b_cis = [], []
         for level in b_levels:
-            m, ci95 = ci(df[df['FactorB']==level])
-            b_means.append(m)
-            b_cis.append(ci95)
+            m, c = ci(df[df['FactorB']==level])
+            b_means.append(m); b_cis.append(c)
 
-        # Create plots
+        # Plots
         st.subheader("Visualization")
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-        
-        # Plot 1: Factor A (Cutting Speed) with 95% CI
+        # Factor A (Cutting Speed)
         axes[0].bar(a_levels, a_means, yerr=a_cis, capsize=5, color=['skyblue', 'steelblue'], edgecolor='black')
         axes[0].set_xlabel('Cutting Speed')
         axes[0].set_ylabel('Mean Surface Roughness (µm)')
         axes[0].set_title('Effect of Cutting Speed (95% CI)')
         axes[0].grid(axis='y', linestyle='--', alpha=0.7)
-        
-        # Plot 2: Factor B (Coolant) with 95% CI
+        # Factor B (Coolant)
         axes[1].bar(b_levels, b_means, yerr=b_cis, capsize=5, color=['lightcoral', 'darkred'], edgecolor='black')
         axes[1].set_xlabel('Coolant Type')
         axes[1].set_ylabel('Mean Surface Roughness (µm)')
         axes[1].set_title('Effect of Coolant (95% CI)')
         axes[1].grid(axis='y', linestyle='--', alpha=0.7)
-        
-        # Plot 3: Interaction plot (line plot with error bars)
-        # Prepare interaction data
+        # Interaction plot
         inter = df.groupby(['FactorA', 'FactorB'])['Response'].agg(['mean', 'sem']).reset_index()
-        inter['ci'] = inter['sem'] * stats.t.ppf((1+0.95)/2, df.groupby(['FactorA','FactorB']).size().values[0]-1)
-        # Pivot for easier plotting
+        inter['ci'] = inter['sem'] * stats.t.ppf((1+0.95)/2, len(df)-1)
         pivot_mean = inter.pivot(index='FactorA', columns='FactorB', values='mean')
         pivot_ci = inter.pivot(index='FactorA', columns='FactorB', values='ci')
         for coolant in pivot_mean.columns:
-            axes[2].errorbar(pivot_mean.index, pivot_mean[coolant], yerr=pivot_ci[coolant], 
-                             marker='o', label=coolant, capsize=5, linewidth=2)
+            axes[2].errorbar(pivot_mean.index, pivot_mean[coolant], yerr=pivot_ci[coolant], marker='o', label=coolant, capsize=5, linewidth=2)
         axes[2].set_xlabel('Cutting Speed')
         axes[2].set_ylabel('Mean Surface Roughness (µm)')
         axes[2].set_title('Interaction Plot (95% CI)')
         axes[2].legend()
         axes[2].grid(True, linestyle='--', alpha=0.7)
-        
         plt.tight_layout()
         st.pyplot(fig)
-        
-        # Optional: Block means plot
+
+        # Block means
         st.subheader("Block Means")
         block_means = df.groupby('Block')['Response'].mean().round(3)
         st.dataframe(pd.DataFrame(block_means))
@@ -409,7 +415,7 @@ if st.button("🔬 Run Analysis", type="primary"):
         ax.grid(axis='y', linestyle='--', alpha=0.7)
         st.pyplot(fig2)
 
-        # Conclusion based on ANOVA
+        # Conclusion
         p_a = anova_table.loc['C(FactorA)', 'PR(>F)']
         p_b = anova_table.loc['C(FactorB)', 'PR(>F)']
         p_int = anova_table.loc['C(FactorA):C(FactorB)', 'PR(>F)']
@@ -421,15 +427,29 @@ if st.button("🔬 Run Analysis", type="primary"):
         if p_int >= alpha:
             st.write("❌ **Interaction** is not significant (p > 0.05). The effect of coolant is consistent across speeds.")
 
-    # Other test types (RBD, t-test, etc.) remain as before – not changed for brevity, but you can keep existing code.
-    # We'll include minimal versions to avoid errors.
     elif test_type == "ANOVA (F-test) - RBD":
         df = st.session_state.rbd_df
         model = ols('Response ~ C(Treatment) + C(Block)', data=df).fit()
         anova = sm.stats.anova_lm(model, typ=3)
         st.markdown("---")
-        st.header("ANOVA Results (RBD)")
-        st.dataframe(anova.round(4))
+        st.header("📈 ANOVA Results (RBD)")
+        st.dataframe(anova.drop(index='Intercept').round(4), use_container_width=True)
+        treat_means = df.groupby('Treatment')['Response'].mean().round(3)
+        block_means = df.groupby('Block')['Response'].mean().round(3)
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**Treatment Means**")
+            st.dataframe(pd.DataFrame(treat_means))
+        with col2:
+            st.write("**Block Means**")
+            st.dataframe(pd.DataFrame(block_means))
+        fig, ax = plt.subplots(1,2,figsize=(12,4))
+        treat_means.plot(kind='bar', ax=ax[0], color='skyblue')
+        ax[0].set_title('Treatment Means')
+        block_means.plot(kind='bar', ax=ax[1], color='lightcoral')
+        ax[1].set_title('Block Means')
+        st.pyplot(fig)
+
     elif test_type == "Two-Sample t-test":
         df = st.session_state.twog_df
         groups = df['Group'].unique()
@@ -437,8 +457,15 @@ if st.button("🔬 Run Analysis", type="primary"):
         g2 = df[df['Group']==groups[1]]['Value'].values
         t_stat, p_val = stats.ttest_ind(g1, g2, equal_var=False)
         st.markdown("---")
-        st.header("t-test Results")
+        st.header("Two-Sample t-test Results (Welch)")
+        st.write(f"Group1: n={len(g1)}, mean={np.mean(g1):.3f}")
+        st.write(f"Group2: n={len(g2)}, mean={np.mean(g2):.3f}")
         st.write(f"t = {t_stat:.4f}, p = {p_val:.4f}")
+        if p_val < alpha:
+            st.error("Reject H0: Significant difference.")
+        else:
+            st.success("Fail to reject H0: No significant difference.")
+
     elif test_type == "Two-Sample Z-test":
         df = st.session_state.twog_df
         groups = df['Group'].unique()
@@ -447,13 +474,23 @@ if st.button("🔬 Run Analysis", type="primary"):
         se = np.sqrt(np.var(g1,ddof=1)/len(g1) + np.var(g2,ddof=1)/len(g2))
         z_stat = (np.mean(g1)-np.mean(g2))/se
         p_val = 2*(1 - stats.norm.cdf(abs(z_stat)))
+        st.markdown("---")
+        st.header("Two-Sample Z-test Results")
         st.write(f"z = {z_stat:.4f}, p = {p_val:.4f}")
+        if p_val < alpha:
+            st.error("Reject H0: Significant difference.")
+        else:
+            st.success("Fail to reject H0: No significant difference.")
+
     elif test_type == "Tukey HSD (Post-hoc)":
         df = st.session_state.tukey_df
         tukey = pairwise_tukeyhsd(df['Value'], df['Group'], alpha=alpha)
         st.markdown("---")
         st.header("Tukey HSD Results")
         st.dataframe(pd.DataFrame(data=tukey.summary().data[1:], columns=tukey.summary().data[0]))
+        fig, ax = plt.subplots()
+        tukey.plot_simultaneous(ax=ax)
+        st.pyplot(fig)
 
     st.success("✅ Analysis complete!")
 
