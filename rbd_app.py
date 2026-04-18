@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -31,7 +32,6 @@ if 'analysis_done' not in st.session_state:
 with st.sidebar:
     st.header("⚙️ Settings")
     
-    # معلومات الباحث والمشرف
     st.markdown("---")
     st.markdown("**👩‍🎓 Mariam Muhsen Hussein**")
     st.markdown("*Master student – Advanced Manufacturing System Engineering*")
@@ -111,7 +111,10 @@ def load_rbd():
         st.info("File must have columns: Treatment, Block, Response")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="rbd_upload")
         if uploaded:
-            df = pd.read_csv(uploaded) if uploaded.name.endswith('.csv') else pd.read_excel(uploaded)
+            if uploaded.name.endswith('.csv'):
+                df = pd.read_csv(uploaded)
+            else:
+                df = pd.read_excel(uploaded, engine='openpyxl')
             if all(col in df.columns for col in ['Treatment', 'Block', 'Response']):
                 st.dataframe(df)
                 if st.button("✅ Save Uploaded Data"):
@@ -144,7 +147,10 @@ def load_two_groups():
         st.subheader("Upload Two Groups Data")
         uploaded = st.file_uploader("CSV/Excel (first two columns = groups)", type=['xlsx','csv'], key="twog_upload")
         if uploaded:
-            df = pd.read_csv(uploaded) if uploaded.name.endswith('.csv') else pd.read_excel(uploaded)
+            if uploaded.name.endswith('.csv'):
+                df = pd.read_csv(uploaded)
+            else:
+                df = pd.read_excel(uploaded, engine='openpyxl')
             if df.shape[1] >= 2:
                 g1 = df.iloc[:,0].dropna().values
                 g2 = df.iloc[:,1].dropna().values
@@ -185,7 +191,10 @@ def load_tukey():
         st.subheader("Upload Tukey Data (each column = group)")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="tukey_upload")
         if uploaded:
-            df = pd.read_csv(uploaded) if uploaded.name.endswith('.csv') else pd.read_excel(uploaded)
+            if uploaded.name.endswith('.csv'):
+                df = pd.read_csv(uploaded)
+            else:
+                df = pd.read_excel(uploaded, engine='openpyxl')
             st.dataframe(df)
             if st.button("✅ Save Uploaded Data"):
                 values, labels = [], []
@@ -257,19 +266,65 @@ def load_factorial():
         return st.session_state.get('factorial_df', None)
     else:
         st.subheader("Upload Factorial Data")
-        st.info("File must have columns: Block, FactorA, FactorB, Response")
+        st.info("File should contain columns: Block, FactorA, FactorB, Response (names can be flexible, e.g., 'Cutting Speed', 'Coolant', 'Surface Roughness (µm)')")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="fact_upload")
         if uploaded:
-            df = pd.read_csv(uploaded) if uploaded.name.endswith('.csv') else pd.read_excel(uploaded)
-            required = ['Block', 'FactorA', 'FactorB', 'Response']
-            if all(col in df.columns for col in required):
-                st.dataframe(df)
+            try:
+                if uploaded.name.endswith('.csv'):
+                    df = pd.read_csv(uploaded)
+                else:
+                    df = pd.read_excel(uploaded, engine='openpyxl')
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
+                return None
+
+            st.write("Data preview (original column names):")
+            st.dataframe(df.head())
+
+            # Flexible column mapping
+            col_mapping = {}
+            # Block
+            if 'Block' in df.columns:
+                col_mapping['Block'] = 'Block'
+            elif 'block' in df.columns:
+                col_mapping['Block'] = 'block'
+            # Factor A (Cutting Speed)
+            if 'FactorA' in df.columns:
+                col_mapping['FactorA'] = 'FactorA'
+            elif 'Cutting Speed' in df.columns:
+                col_mapping['FactorA'] = 'Cutting Speed'
+            elif 'Speed' in df.columns:
+                col_mapping['FactorA'] = 'Speed'
+            elif 'factorA' in df.columns:
+                col_mapping['FactorA'] = 'factorA'
+            # Factor B (Coolant)
+            if 'FactorB' in df.columns:
+                col_mapping['FactorB'] = 'FactorB'
+            elif 'Coolant' in df.columns:
+                col_mapping['FactorB'] = 'Coolant'
+            elif 'factorB' in df.columns:
+                col_mapping['FactorB'] = 'factorB'
+            # Response (Surface Roughness)
+            if 'Response' in df.columns:
+                col_mapping['Response'] = 'Response'
+            elif 'Surface Roughness (µm)' in df.columns:
+                col_mapping['Response'] = 'Surface Roughness (µm)'
+            elif 'Roughness' in df.columns:
+                col_mapping['Response'] = 'Roughness'
+            elif 'response' in df.columns:
+                col_mapping['Response'] = 'response'
+
+            if len(col_mapping) == 4:
+                df_renamed = df.rename(columns=col_mapping)
+                st.success("Columns automatically mapped!")
+                st.write("Renamed data preview (first 5 rows):")
+                st.dataframe(df_renamed[['Block', 'FactorA', 'FactorB', 'Response']].head())
                 if st.button("✅ Save Uploaded Data"):
-                    st.session_state.factorial_df = df.dropna()
+                    st.session_state.factorial_df = df_renamed[['Block', 'FactorA', 'FactorB', 'Response']].dropna()
                     st.session_state.data_loaded = True
                     st.rerun()
             else:
-                st.error(f"Missing required columns: {required}")
+                st.error(f"Could not find required columns. Found: {list(df.columns)}. Expected: Block, FactorA, FactorB, Response or similar (Cutting Speed, Coolant, Surface Roughness (µm)).")
         return None
 
 # ============================================================
@@ -317,8 +372,9 @@ if st.button("🔬 Run Analysis", type="primary"):
 
     elif test_type == "Two-Sample t-test":
         df = st.session_state.twog_df
-        g1 = df[df['Group']==df['Group'].unique()[0]]['Value'].values
-        g2 = df[df['Group']==df['Group'].unique()[1]]['Value'].values
+        groups = df['Group'].unique()
+        g1 = df[df['Group']==groups[0]]['Value'].values
+        g2 = df[df['Group']==groups[1]]['Value'].values
         t_stat, p_val = stats.ttest_ind(g1, g2, equal_var=False)
         st.markdown("---")
         st.header("Two-Sample t-test Results (Welch)")
@@ -332,8 +388,9 @@ if st.button("🔬 Run Analysis", type="primary"):
 
     elif test_type == "Two-Sample Z-test":
         df = st.session_state.twog_df
-        g1 = df[df['Group']==df['Group'].unique()[0]]['Value'].values
-        g2 = df[df['Group']==df['Group'].unique()[1]]['Value'].values
+        groups = df['Group'].unique()
+        g1 = df[df['Group']==groups[0]]['Value'].values
+        g2 = df[df['Group']==groups[1]]['Value'].values
         se = np.sqrt(np.var(g1,ddof=1)/len(g1) + np.var(g2,ddof=1)/len(g2))
         z_stat = (np.mean(g1)-np.mean(g2))/se
         p_val = 2*(1 - stats.norm.cdf(abs(z_stat)))
@@ -394,4 +451,4 @@ if st.button("🔬 Run Analysis", type="primary"):
     st.success("✅ Analysis complete!")
 
 st.markdown("---")
-st.caption("Multi-Test Statistical Analysis Suite | Accurate Type III ANOVA | Factorial with Blocking")
+st.caption("Multi-Test Statistical Analysis Suite | Accurate Type III ANOVA | Factorial with Blocking | Flexible column mapping")
