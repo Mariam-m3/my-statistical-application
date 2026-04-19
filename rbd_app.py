@@ -9,6 +9,7 @@ from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
 st.set_page_config(page_title="Multi-Test Statistical Analysis Suite", page_icon="📊", layout="wide")
 
+# Dark theme
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: white; }
@@ -20,7 +21,7 @@ st.title("📊 Multi-Test Statistical Analysis Suite")
 st.markdown("### *ANOVA (RBD) | t-test | Z-test | Tukey | Factorial ANOVA with Blocking*")
 st.markdown("---")
 
-# Session state
+# Initialize session state
 if 'test_type' not in st.session_state:
     st.session_state.test_type = "Two-Way Factorial ANOVA with Blocking"
 if 'factorial_df' not in st.session_state:
@@ -149,16 +150,17 @@ def load_factorial():
                         else:
                             row['Block'] = 'All'
                         rows.append(row)
-            if st.form_submit_button("✅ Save Data"):
+            submitted = st.form_submit_button("✅ Save Data")
+            if submitted:
                 df = pd.DataFrame(rows)
                 df = ensure_numeric(df, 'Response')
                 if df.empty:
                     st.error("No valid numeric data. Please enter numbers.")
-                    return
-                st.session_state.factorial_df = df
-                st.session_state.fact_names = {'FactorA': name_a, 'FactorB': name_b}
-                st.session_state.factorial_loaded = True
-                st.rerun()
+                else:
+                    st.session_state.factorial_df = df
+                    st.session_state.fact_names = {'FactorA': name_a, 'FactorB': name_b}
+                    st.session_state.factorial_loaded = True
+                    st.rerun()
         return
     else:  # Upload file
         st.subheader("Upload Factorial Data")
@@ -176,16 +178,22 @@ def load_factorial():
             st.write("Preview:")
             st.dataframe(df_raw.head())
             
+            # Check for wide format: first column has at least 2 unique values, and at least 2 other columns
             if df_raw.shape[1] >= 3 and df_raw.iloc[:,0].nunique() >= 2:
+                # Ensure there are at least 2 factor B levels (columns after first)
+                if len(df_raw.columns[1:]) < 2:
+                    st.error("⚠️ Wide format: the file must have at least 2 columns for Factor B levels (e.g., Dry and Wet).")
+                    return
                 factor_a_col = df_raw.columns[0]
                 factor_b_cols = df_raw.columns[1:]
                 melted = pd.melt(df_raw, id_vars=[factor_a_col], var_name='FactorB', value_name='Response')
                 melted.rename(columns={factor_a_col: 'FactorA'}, inplace=True)
                 melted['Block'] = 'All'
                 df_long = melted
-                st.success("Detected wide format. Converted to long.")
-                st.session_state.fact_names = {'FactorA': factor_a_col, 'FactorB': ' vs '.join(factor_b_cols)}
+                st.success("Detected wide format. Converted to long automatically.")
+                st.session_state.fact_names = {'FactorA': factor_a_col, 'FactorB': ' & '.join(factor_b_cols)}
             elif df_raw.shape[1] == 3:
+                # Long format without Block
                 df_long = pd.DataFrame({
                     'Block': 'All',
                     'FactorA': df_raw.iloc[:,0].astype(str),
@@ -194,6 +202,7 @@ def load_factorial():
                 })
                 st.session_state.fact_names = {'FactorA': df_raw.columns[0], 'FactorB': df_raw.columns[1]}
             elif df_raw.shape[1] == 4:
+                # Long format with Block
                 df_long = pd.DataFrame({
                     'Block': df_raw.iloc[:,0].astype(str),
                     'FactorA': df_raw.iloc[:,1].astype(str),
@@ -202,7 +211,7 @@ def load_factorial():
                 })
                 st.session_state.fact_names = {'FactorA': df_raw.columns[1], 'FactorB': df_raw.columns[2]}
             else:
-                st.error("Unsupported data shape. Use wide (2+ columns) or long (3 or 4 columns).")
+                st.error("Unsupported data shape. Use wide (≥3 columns) or long (3 or 4 columns).")
                 return
             df_long = df_long.dropna(subset=['Response'])
             if df_long.empty:
@@ -223,7 +232,6 @@ def analyze_factorial(df, alpha, name_a, name_b):
         st.error("No valid numeric data in Response column.")
         return
 
-    # Check minimum requirements
     if df['FactorA'].nunique() < 2:
         st.error(f"Factor A ('{name_a}') has only {df['FactorA'].nunique()} level(s). Need at least 2.")
         return
@@ -327,7 +335,6 @@ def analyze_factorial(df, alpha, name_a, name_b):
         ax4.grid(axis='y', linestyle='--', alpha=0.7)
         st.pyplot(fig4)
 
-    # Conclusion
     if 'C(FactorA)' in anova.index:
         p_a = anova.loc['C(FactorA)', 'PR(>F)']
         if p_a < alpha:
@@ -374,7 +381,8 @@ def load_rbd():
                         val = st.number_input(f"{treat_names[i]},{block_names[j]}", value=10.0, key=f"rbd_man_{i}_{j}", step=0.1)
                         row.append(val)
                 data_input.append(row)
-            if st.form_submit_button("✅ Save Data"):
+            submitted = st.form_submit_button("✅ Save Data")
+            if submitted:
                 Y = np.array(data_input)
                 rows = []
                 for i, tr in enumerate(treat_names):
@@ -384,10 +392,10 @@ def load_rbd():
                 df = ensure_numeric(df, 'Response')
                 if df.empty:
                     st.error("No valid numeric data.")
-                    return
-                st.session_state.rbd_df = df
-                st.session_state.rbd_loaded = True
-                st.rerun()
+                else:
+                    st.session_state.rbd_df = df
+                    st.session_state.rbd_loaded = True
+                    st.rerun()
         return
     else:
         st.subheader("Upload RBD Data")
@@ -468,7 +476,8 @@ def load_two_groups():
         with st.form(key="twog_manual"):
             g1_str = st.text_area("Group1 values (comma separated)", "23,25,28,22,26")
             g2_str = st.text_area("Group2 values (comma separated)", "19,21,24,20,22")
-            if st.form_submit_button("✅ Save Data"):
+            submitted = st.form_submit_button("✅ Save Data")
+            if submitted:
                 try:
                     g1 = np.array([float(x.strip()) for x in g1_str.split(',')])
                     g2 = np.array([float(x.strip()) for x in g2_str.split(',')])
@@ -544,7 +553,8 @@ def load_tukey():
         st.subheader("Manual Tukey")
         with st.form(key="tukey_manual"):
             text_input = st.text_area("Groups (one per line: Group: val1,val2)", "Group1: 23,25,28\nGroup2: 19,21,24")
-            if st.form_submit_button("✅ Save Data"):
+            submitted = st.form_submit_button("✅ Save Data")
+            if submitted:
                 values, labels = [], []
                 try:
                     for line in text_input.strip().split('\n'):
@@ -634,6 +644,3 @@ elif st.session_state.test_type == "Tukey HSD (Post-hoc)":
             st.error("Please load Tukey data first.")
         else:
             analyze_tukey(st.session_state.tukey_df, alpha)
-
-st.markdown("---")
-st.caption("Multi-Test Statistical Analysis Suite | Fast & flexible | Manual entry first | All errors fixed")
