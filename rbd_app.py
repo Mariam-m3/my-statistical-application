@@ -6,11 +6,9 @@ from scipy import stats
 import statsmodels.api as sm
 from statsmodels.formula.api import ols
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
-import re
 
 st.set_page_config(page_title="Multi-Test Statistical Analysis Suite", page_icon="📊", layout="wide")
 
-# Dark theme
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: white; }
@@ -22,7 +20,7 @@ st.title("📊 Multi-Test Statistical Analysis Suite")
 st.markdown("### *ANOVA (RBD) | t-test | Z-test | Tukey | Factorial ANOVA with Blocking*")
 st.markdown("---")
 
-# Initialize session state
+# Session state
 if 'test_type' not in st.session_state:
     st.session_state.test_type = "Two-Way Factorial ANOVA with Blocking"
 if 'factorial_df' not in st.session_state:
@@ -64,7 +62,6 @@ with st.sidebar:
     )
     if new_test_type != st.session_state.test_type:
         st.session_state.test_type = new_test_type
-        # Reset loaded flag for new test
         if new_test_type == "Two-Way Factorial ANOVA with Blocking":
             st.session_state.factorial_loaded = False
         elif new_test_type == "ANOVA (F-test) - RBD":
@@ -75,7 +72,6 @@ with st.sidebar:
             st.session_state.tukey_loaded = False
         st.rerun()
     
-    # Make Manual entry the first option
     data_source = st.radio("Data input method:", ["✏️ Manual entry", "📂 Upload Excel/CSV"])
     alpha = st.number_input("Significance level (α)", min_value=0.01, max_value=0.20, value=0.05, step=0.01)
     
@@ -98,7 +94,6 @@ with st.sidebar:
 # Helper functions
 # ------------------------------------------------------------------
 def mean_ci(vals):
-    """Return mean and half-width of 95% confidence interval."""
     m = np.mean(vals)
     n = len(vals)
     if n > 1:
@@ -108,10 +103,8 @@ def mean_ci(vals):
     return m, ci
 
 def ensure_numeric(df, col='Response'):
-    """Convert column to numeric, dropping non-numeric rows."""
     df[col] = pd.to_numeric(df[col], errors='coerce')
-    df = df.dropna(subset=[col])
-    return df
+    return df.dropna(subset=[col])
 
 # ------------------------------------------------------------------
 # Factorial ANOVA with Blocking
@@ -159,6 +152,9 @@ def load_factorial():
             if st.form_submit_button("✅ Save Data"):
                 df = pd.DataFrame(rows)
                 df = ensure_numeric(df, 'Response')
+                if df.empty:
+                    st.error("No valid numeric data. Please enter numbers.")
+                    return
                 st.session_state.factorial_df = df
                 st.session_state.fact_names = {'FactorA': name_a, 'FactorB': name_b}
                 st.session_state.factorial_loaded = True
@@ -180,19 +176,16 @@ def load_factorial():
             st.write("Preview:")
             st.dataframe(df_raw.head())
             
-            # Detect format and convert
             if df_raw.shape[1] >= 3 and df_raw.iloc[:,0].nunique() >= 2:
-                # Wide format
                 factor_a_col = df_raw.columns[0]
                 factor_b_cols = df_raw.columns[1:]
                 melted = pd.melt(df_raw, id_vars=[factor_a_col], var_name='FactorB', value_name='Response')
                 melted.rename(columns={factor_a_col: 'FactorA'}, inplace=True)
                 melted['Block'] = 'All'
                 df_long = melted
-                st.success("Detected wide format. Converted to long automatically.")
+                st.success("Detected wide format. Converted to long.")
                 st.session_state.fact_names = {'FactorA': factor_a_col, 'FactorB': ' vs '.join(factor_b_cols)}
             elif df_raw.shape[1] == 3:
-                # Long format without Block
                 df_long = pd.DataFrame({
                     'Block': 'All',
                     'FactorA': df_raw.iloc[:,0].astype(str),
@@ -201,7 +194,6 @@ def load_factorial():
                 })
                 st.session_state.fact_names = {'FactorA': df_raw.columns[0], 'FactorB': df_raw.columns[1]}
             elif df_raw.shape[1] == 4:
-                # Long format with Block
                 df_long = pd.DataFrame({
                     'Block': df_raw.iloc[:,0].astype(str),
                     'FactorA': df_raw.iloc[:,1].astype(str),
@@ -213,6 +205,9 @@ def load_factorial():
                 st.error("Unsupported data shape. Use wide (2+ columns) or long (3 or 4 columns).")
                 return
             df_long = df_long.dropna(subset=['Response'])
+            if df_long.empty:
+                st.error("No valid numeric data after conversion.")
+                return
             st.session_state.factorial_df = df_long
             st.session_state.factorial_loaded = True
             st.rerun()
@@ -228,12 +223,24 @@ def analyze_factorial(df, alpha, name_a, name_b):
         st.error("No valid numeric data in Response column.")
         return
 
-    formula = 'Response ~ C(FactorB) + C(FactorA) + C(Block) + C(FactorA):C(FactorB)'
+    # Check minimum requirements
+    if df['FactorA'].nunique() < 2:
+        st.error(f"Factor A ('{name_a}') has only {df['FactorA'].nunique()} level(s). Need at least 2.")
+        return
+    if df['FactorB'].nunique() < 2:
+        st.error(f"Factor B ('{name_b}') has only {df['FactorB'].nunique()} level(s). Need at least 2.")
+        return
+    if len(df) < 4:
+        st.error("Not enough data points (need at least 4).")
+        return
+
     try:
+        formula = 'Response ~ C(FactorB) + C(FactorA) + C(Block) + C(FactorA):C(FactorB)'
         model = ols(formula, data=df).fit()
         anova = sm.stats.anova_lm(model, typ=2)
     except Exception as e:
         st.error(f"ANOVA failed: {e}")
+        st.info("Possible reasons: insufficient data, singular design, or constant response values.")
         return
 
     grand_mean = df['Response'].mean()
@@ -265,7 +272,6 @@ def analyze_factorial(df, alpha, name_a, name_b):
     st.dataframe(anova_df, use_container_width=True)
 
     st.subheader("Visualization")
-    # Factor A plot
     levels_a = sorted(df['FactorA'].unique())
     means_a, err_a = [], []
     for lev in levels_a:
@@ -279,7 +285,6 @@ def analyze_factorial(df, alpha, name_a, name_b):
     ax1.grid(axis='y', linestyle='--', alpha=0.7)
     st.pyplot(fig1)
 
-    # Factor B plot
     levels_b = sorted(df['FactorB'].unique())
     means_b, err_b = [], []
     for lev in levels_b:
@@ -293,7 +298,6 @@ def analyze_factorial(df, alpha, name_a, name_b):
     ax2.grid(axis='y', linestyle='--', alpha=0.7)
     st.pyplot(fig2)
 
-    # Interaction plot
     inter = df.groupby(['FactorA', 'FactorB'])['Response'].agg(list).reset_index()
     inter_means, inter_err = [], []
     for _, row in inter.iterrows():
@@ -378,11 +382,14 @@ def load_rbd():
                         rows.append({'Treatment': tr, 'Block': bl, 'Response': Y[i,j]})
                 df = pd.DataFrame(rows)
                 df = ensure_numeric(df, 'Response')
+                if df.empty:
+                    st.error("No valid numeric data.")
+                    return
                 st.session_state.rbd_df = df
                 st.session_state.rbd_loaded = True
                 st.rerun()
         return
-    else:  # Upload file
+    else:
         st.subheader("Upload RBD Data")
         st.info("File must have columns: Treatment, Block, Response (in that order).")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="rbd_upload")
@@ -404,6 +411,9 @@ def load_rbd():
                     'Response': pd.to_numeric(df_raw.iloc[:,2], errors='coerce')
                 })
                 df = df.dropna(subset=['Response'])
+                if df.empty:
+                    st.error("No valid numeric data in Response column.")
+                    return
                 st.session_state.rbd_df = df
                 st.session_state.rbd_loaded = True
                 st.rerun()
@@ -415,7 +425,6 @@ def analyze_rbd(df, alpha):
     model = ols('Response ~ C(Treatment) + C(Block)', data=df).fit()
     anova = sm.stats.anova_lm(model, typ=2)
     st.subheader("ANOVA Table (RBD)")
-    # Drop 'Intercept' only if present
     if 'Intercept' in anova.index:
         anova_display = anova.drop(index='Intercept').round(4)
     else:
@@ -504,7 +513,7 @@ def analyze_two_groups(df, test_type, alpha):
         st.write(f"Group1: n={len(g1)}, mean={np.mean(g1):.3f}, std={np.std(g1, ddof=1):.3f}")
         st.write(f"Group2: n={len(g2)}, mean={np.mean(g2):.3f}, std={np.std(g2, ddof=1):.3f}")
         st.write(f"t = {t_stat:.4f}, p = {p_val:.4f}")
-    else:  # Z-test
+    else:
         se = np.sqrt(np.var(g1, ddof=1)/len(g1) + np.var(g2, ddof=1)/len(g2))
         z_stat = (np.mean(g1)-np.mean(g2))/se
         p_val = 2*(1 - stats.norm.cdf(abs(z_stat)))
@@ -586,7 +595,7 @@ def analyze_tukey(df, alpha):
     st.success("Analysis complete!")
 
 # ------------------------------------------------------------------
-# Main: Load data and run analysis based on test type
+# Main
 # ------------------------------------------------------------------
 if st.session_state.test_type == "Two-Way Factorial ANOVA with Blocking":
     load_factorial()
@@ -627,4 +636,4 @@ elif st.session_state.test_type == "Tukey HSD (Post-hoc)":
             analyze_tukey(st.session_state.tukey_df, alpha)
 
 st.markdown("---")
-st.caption("Multi-Test Statistical Analysis Suite | Fast & flexible | Manual entry first | Fixed all errors")
+st.caption("Multi-Test Statistical Analysis Suite | Fast & flexible | Manual entry first | All errors fixed")
