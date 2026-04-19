@@ -9,7 +9,6 @@ from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
 st.set_page_config(page_title="Multi-Test Statistical Analysis Suite", page_icon="📊", layout="wide")
 
-# Dark theme
 st.markdown("""
 <style>
     .stApp { background-color: #0e1117; color: white; }
@@ -21,7 +20,7 @@ st.title("📊 Multi-Test Statistical Analysis Suite")
 st.markdown("### *ANOVA (RBD) | t-test | Z-test | Tukey | Factorial ANOVA with Blocking*")
 st.markdown("---")
 
-# Initialize session state
+# Session state
 if 'test_type' not in st.session_state:
     st.session_state.test_type = "Two-Way Factorial ANOVA with Blocking"
 if 'factorial_df' not in st.session_state:
@@ -178,22 +177,25 @@ def load_factorial():
             st.write("Preview:")
             st.dataframe(df_raw.head())
             
-            # Check for wide format: first column has at least 2 unique values, and at least 2 other columns
+            # --- Wide format detection ---
             if df_raw.shape[1] >= 3 and df_raw.iloc[:,0].nunique() >= 2:
-                # Ensure there are at least 2 factor B levels (columns after first)
-                if len(df_raw.columns[1:]) < 2:
-                    st.error("⚠️ Wide format: the file must have at least 2 columns for Factor B levels (e.g., Dry and Wet).")
-                    return
-                factor_a_col = df_raw.columns[0]
                 factor_b_cols = df_raw.columns[1:]
-                melted = pd.melt(df_raw, id_vars=[factor_a_col], var_name='FactorB', value_name='Response')
-                melted.rename(columns={factor_a_col: 'FactorA'}, inplace=True)
+                if len(factor_b_cols) < 2:
+                    st.error("⚠️ The file appears to be in wide format but has only one column for Factor B levels. Please provide at least two columns (e.g., Dry and Wet).")
+                    return
+                # Convert wide to long
+                melted = pd.melt(df_raw, id_vars=[df_raw.columns[0]], var_name='FactorB', value_name='Response')
+                melted.rename(columns={df_raw.columns[0]: 'FactorA'}, inplace=True)
                 melted['Block'] = 'All'
+                # Check that FactorB has at least 2 distinct levels
+                if melted['FactorB'].nunique() < 2:
+                    st.error("After conversion, Factor B has only one level. Please check your data: the column names for Factor B should represent different levels (e.g., 'Dry' and 'Wet').")
+                    return
                 df_long = melted
-                st.success("Detected wide format. Converted to long automatically.")
-                st.session_state.fact_names = {'FactorA': factor_a_col, 'FactorB': ' & '.join(factor_b_cols)}
+                st.success("Detected wide format. Converted to long successfully.")
+                st.session_state.fact_names = {'FactorA': df_raw.columns[0], 'FactorB': 'Factor B (levels: ' + ', '.join(factor_b_cols) + ')'}
+            # --- Long format without Block (3 columns) ---
             elif df_raw.shape[1] == 3:
-                # Long format without Block
                 df_long = pd.DataFrame({
                     'Block': 'All',
                     'FactorA': df_raw.iloc[:,0].astype(str),
@@ -201,8 +203,8 @@ def load_factorial():
                     'Response': pd.to_numeric(df_raw.iloc[:,2], errors='coerce')
                 })
                 st.session_state.fact_names = {'FactorA': df_raw.columns[0], 'FactorB': df_raw.columns[1]}
+            # --- Long format with Block (4 columns) ---
             elif df_raw.shape[1] == 4:
-                # Long format with Block
                 df_long = pd.DataFrame({
                     'Block': df_raw.iloc[:,0].astype(str),
                     'FactorA': df_raw.iloc[:,1].astype(str),
@@ -213,10 +215,20 @@ def load_factorial():
             else:
                 st.error("Unsupported data shape. Use wide (≥3 columns) or long (3 or 4 columns).")
                 return
+            
             df_long = df_long.dropna(subset=['Response'])
             if df_long.empty:
-                st.error("No valid numeric data after conversion.")
+                st.error("No valid numeric data after conversion. Please check your response column.")
                 return
+            
+            # Final validation
+            if df_long['FactorA'].nunique() < 2:
+                st.error(f"Factor A has only {df_long['FactorA'].nunique()} level(s). Need at least 2 distinct values.")
+                return
+            if df_long['FactorB'].nunique() < 2:
+                st.error(f"Factor B has only {df_long['FactorB'].nunique()} level(s). Need at least 2 distinct values. Check the column names (for wide format) or the second column values (for long format).")
+                return
+            
             st.session_state.factorial_df = df_long
             st.session_state.factorial_loaded = True
             st.rerun()
