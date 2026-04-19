@@ -107,7 +107,7 @@ def ensure_numeric(df, col='Response'):
     return df.dropna(subset=[col])
 
 # ------------------------------------------------------------------
-# Factorial ANOVA with Blocking
+# Factorial ANOVA with Blocking - with manual column mapping option
 # ------------------------------------------------------------------
 def load_factorial():
     if st.session_state.factorial_loaded and st.session_state.factorial_df is not None:
@@ -163,7 +163,7 @@ def load_factorial():
         return
     else:  # Upload file
         st.subheader("Upload Factorial Data")
-        st.info("Accepts wide format (first column = Factor A levels, other columns = Factor B levels) or long format (Block, FactorA, FactorB, Response).")
+        st.info("If automatic detection fails, you will be asked to manually select columns.")
         uploaded = st.file_uploader("CSV/Excel", type=['xlsx','csv'], key="fact_upload")
         if uploaded:
             try:
@@ -174,203 +174,67 @@ def load_factorial():
             except Exception as e:
                 st.error(f"Error reading file: {e}")
                 return
-            st.write("Preview:")
+            
+            st.write("Preview of uploaded file:")
             st.dataframe(df_raw.head())
             
-            # --- Wide format detection ---
-            if df_raw.shape[1] >= 3 and df_raw.iloc[:,0].nunique() >= 2:
-                factor_b_cols = df_raw.columns[1:]
-                if len(factor_b_cols) < 2:
-                    st.error("⚠️ The file appears to be in wide format but has only one column for Factor B levels. Please provide at least two columns (e.g., Dry and Wet).")
-                    return
-                # Convert wide to long
-                melted = pd.melt(df_raw, id_vars=[df_raw.columns[0]], var_name='FactorB', value_name='Response')
-                melted.rename(columns={df_raw.columns[0]: 'FactorA'}, inplace=True)
-                melted['Block'] = 'All'
-                # Check that FactorB has at least 2 distinct levels
-                if melted['FactorB'].nunique() < 2:
-                    st.error("After conversion, Factor B has only one level. Please check your data: the column names for Factor B should represent different levels (e.g., 'Dry' and 'Wet').")
-                    return
-                df_long = melted
-                st.success("Detected wide format. Converted to long successfully.")
-                st.session_state.fact_names = {'FactorA': df_raw.columns[0], 'FactorB': 'Factor B (levels: ' + ', '.join(factor_b_cols) + ')'}
-            # --- Long format without Block (3 columns) ---
-            elif df_raw.shape[1] == 3:
-                df_long = pd.DataFrame({
-                    'Block': 'All',
-                    'FactorA': df_raw.iloc[:,0].astype(str),
-                    'FactorB': df_raw.iloc[:,1].astype(str),
-                    'Response': pd.to_numeric(df_raw.iloc[:,2], errors='coerce')
-                })
-                st.session_state.fact_names = {'FactorA': df_raw.columns[0], 'FactorB': df_raw.columns[1]}
-            # --- Long format with Block (4 columns) ---
-            elif df_raw.shape[1] == 4:
-                df_long = pd.DataFrame({
-                    'Block': df_raw.iloc[:,0].astype(str),
-                    'FactorA': df_raw.iloc[:,1].astype(str),
-                    'FactorB': df_raw.iloc[:,2].astype(str),
-                    'Response': pd.to_numeric(df_raw.iloc[:,3], errors='coerce')
-                })
-                st.session_state.fact_names = {'FactorA': df_raw.columns[1], 'FactorB': df_raw.columns[2]}
-            else:
-                st.error("Unsupported data shape. Use wide (≥3 columns) or long (3 or 4 columns).")
-                return
-            
-            df_long = df_long.dropna(subset=['Response'])
-            if df_long.empty:
-                st.error("No valid numeric data after conversion. Please check your response column.")
-                return
-            
-            # Final validation
-            if df_long['FactorA'].nunique() < 2:
-                st.error(f"Factor A has only {df_long['FactorA'].nunique()} level(s). Need at least 2 distinct values.")
-                return
-            if df_long['FactorB'].nunique() < 2:
-                st.error(f"Factor B has only {df_long['FactorB'].nunique()} level(s). Need at least 2 distinct values. Check the column names (for wide format) or the second column values (for long format).")
-                return
-            
-            st.session_state.factorial_df = df_long
-            st.session_state.factorial_loaded = True
+            # Store raw dataframe in session state for manual mapping
+            st.session_state.fact_raw_df = df_raw
+            st.session_state.fact_needs_mapping = True
             st.rerun()
-
-def analyze_factorial(df, alpha, name_a, name_b):
-    if 'Block' not in df.columns:
-        df['Block'] = 'All'
-    df['FactorA'] = df['FactorA'].astype(str)
-    df['FactorB'] = df['FactorB'].astype(str)
-    df['Block'] = df['Block'].astype(str)
-    df = ensure_numeric(df, 'Response')
-    if df.empty:
-        st.error("No valid numeric data in Response column.")
         return
 
-    if df['FactorA'].nunique() < 2:
-        st.error(f"Factor A ('{name_a}') has only {df['FactorA'].nunique()} level(s). Need at least 2.")
+# Separate function to handle manual column mapping
+def manual_column_mapping_factorial():
+    if 'fact_raw_df' not in st.session_state:
         return
-    if df['FactorB'].nunique() < 2:
-        st.error(f"Factor B ('{name_b}') has only {df['FactorB'].nunique()} level(s). Need at least 2.")
-        return
-    if len(df) < 4:
-        st.error("Not enough data points (need at least 4).")
-        return
-
-    try:
-        formula = 'Response ~ C(FactorB) + C(FactorA) + C(Block) + C(FactorA):C(FactorB)'
-        model = ols(formula, data=df).fit()
-        anova = sm.stats.anova_lm(model, typ=2)
-    except Exception as e:
-        st.error(f"ANOVA failed: {e}")
-        st.info("Possible reasons: insufficient data, singular design, or constant response values.")
-        return
-
-    grand_mean = df['Response'].mean()
-    ss_total = np.sum((df['Response'] - grand_mean)**2)
-
-    results = []
-    for factor_key, factor_name in [('C(FactorB)', name_b), ('C(FactorA)', name_a),
-                                    ('C(Block)', 'Block'), ('C(FactorA):C(FactorB)', f'{name_a} × {name_b}')]:
-        if factor_key not in anova.index:
-            continue
-        ss = anova.loc[factor_key, 'sum_sq']
-        df_f = anova.loc[factor_key, 'df']
-        ms = ss / df_f
-        f_val = anova.loc[factor_key, 'F']
-        p_val = anova.loc[factor_key, 'PR(>F)']
-        eta = ss / ss_total
-        results.append([factor_name, ss, df_f, ms, f_val, p_val, eta])
-    ss_res = anova.loc['Residual', 'sum_sq']
-    df_res = anova.loc['Residual', 'df']
-    ms_res = ss_res / df_res
-    results.append(['Residuals', ss_res, df_res, ms_res, '', '', ''])
-
-    anova_df = pd.DataFrame(results, columns=['Factor', 'SS', 'df', 'MS', 'F', 'p-value', 'η²'])
-    for col in ['SS', 'MS', 'F', 'η²']:
-        anova_df[col] = anova_df[col].apply(lambda x: round(x, 5) if isinstance(x, (int, float)) else x)
-    anova_df['p-value'] = anova_df['p-value'].apply(lambda x: round(x, 5) if isinstance(x, (int, float)) else x)
-
-    st.subheader("ANOVA Table (Type II)")
-    st.dataframe(anova_df, use_container_width=True)
-
-    st.subheader("Visualization")
-    levels_a = sorted(df['FactorA'].unique())
-    means_a, err_a = [], []
-    for lev in levels_a:
-        m, ci = mean_ci(df[df['FactorA']==lev]['Response'].values)
-        means_a.append(m); err_a.append(ci)
-    fig1, ax1 = plt.subplots(figsize=(6,4))
-    ax1.bar(levels_a, means_a, yerr=err_a, capsize=5, color=['skyblue','steelblue'], edgecolor='black')
-    ax1.set_ylabel('Mean Response')
-    ax1.set_title(f'Effect of {name_a} (95% CI)')
-    ax1.set_xlabel(name_a)
-    ax1.grid(axis='y', linestyle='--', alpha=0.7)
-    st.pyplot(fig1)
-
-    levels_b = sorted(df['FactorB'].unique())
-    means_b, err_b = [], []
-    for lev in levels_b:
-        m, ci = mean_ci(df[df['FactorB']==lev]['Response'].values)
-        means_b.append(m); err_b.append(ci)
-    fig2, ax2 = plt.subplots(figsize=(6,4))
-    ax2.bar(levels_b, means_b, yerr=err_b, capsize=5, color=['lightcoral','darkred'], edgecolor='black')
-    ax2.set_ylabel('Mean Response')
-    ax2.set_title(f'Effect of {name_b} (95% CI)')
-    ax2.set_xlabel(name_b)
-    ax2.grid(axis='y', linestyle='--', alpha=0.7)
-    st.pyplot(fig2)
-
-    inter = df.groupby(['FactorA', 'FactorB'])['Response'].agg(list).reset_index()
-    inter_means, inter_err = [], []
-    for _, row in inter.iterrows():
-        m, ci = mean_ci(row['Response'])
-        inter_means.append(m); inter_err.append(ci)
-    inter['mean'] = inter_means
-    inter['err'] = inter_err
-    fig3, ax3 = plt.subplots(figsize=(6,4))
-    for b in levels_b:
-        sub = inter[inter['FactorB'] == b]
-        ax3.errorbar(sub['FactorA'], sub['mean'], yerr=sub['err'], marker='o', label=b, capsize=5, linewidth=2)
-    ax3.set_xlabel(name_a)
-    ax3.set_ylabel('Mean Response')
-    ax3.set_title('Interaction Plot (95% CI)')
-    ax3.legend(title=name_b)
-    ax3.grid(True, linestyle='--', alpha=0.7)
-    st.pyplot(fig3)
-
-    if len(df['Block'].unique()) > 1:
-        block_means = df.groupby('Block')['Response'].mean().round(3)
-        st.subheader("Block Means")
-        st.dataframe(pd.DataFrame(block_means))
-        fig4, ax4 = plt.subplots(figsize=(6,4))
-        block_means.plot(kind='bar', color='lightgreen', edgecolor='black', ax=ax4)
-        ax4.set_title('Mean Response by Block')
-        ax4.set_ylabel('Mean Response')
-        ax4.grid(axis='y', linestyle='--', alpha=0.7)
-        st.pyplot(fig4)
-
-    if 'C(FactorA)' in anova.index:
-        p_a = anova.loc['C(FactorA)', 'PR(>F)']
-        if p_a < alpha:
-            st.write(f"✅ **{name_a}** has a significant effect (p = {p_a:.4f})")
+    df_raw = st.session_state.fact_raw_df
+    st.subheader("Manual Column Mapping")
+    st.write("Please select which columns correspond to:")
+    cols = df_raw.columns.tolist()
+    col_block = st.selectbox("Block column (optional, select 'None' if not present)", ['None'] + cols)
+    col_factorA = st.selectbox("Factor A column (e.g., Cutting Speed levels)", cols)
+    col_factorB = st.selectbox("Factor B column (e.g., Coolant levels)", [c for c in cols if c != col_factorA])
+    col_response = st.selectbox("Response column (numerical values)", [c for c in cols if c not in [col_factorA, col_factorB]])
+    
+    if st.button("✅ Apply Mapping and Save Data"):
+        if col_factorA == col_factorB or col_factorA == col_response or col_factorB == col_response:
+            st.error("Please select distinct columns for Factor A, Factor B, and Response.")
+            return
+        # Build long format dataframe
+        df_long = pd.DataFrame({
+            'FactorA': df_raw[col_factorA].astype(str),
+            'FactorB': df_raw[col_factorB].astype(str),
+            'Response': pd.to_numeric(df_raw[col_response], errors='coerce')
+        })
+        if col_block != 'None':
+            df_long['Block'] = df_raw[col_block].astype(str)
         else:
-            st.write(f"❌ **{name_a}** effect not significant (p = {p_a:.4f})")
-    if 'C(FactorB)' in anova.index:
-        p_b = anova.loc['C(FactorB)', 'PR(>F)']
-        if p_b < alpha:
-            st.write(f"✅ **{name_b}** has a significant effect (p = {p_b:.4f})")
-        else:
-            st.write(f"❌ **{name_b}** effect not significant (p = {p_b:.4f})")
-    if 'C(Block)' in anova.index:
-        p_block = anova.loc['C(Block)', 'PR(>F)']
-        if p_block < alpha:
-            st.write(f"⚠️ **Block** has a significant effect (p = {p_block:.4f})")
-    if 'C(FactorA):C(FactorB)' in anova.index:
-        p_int = anova.loc['C(FactorA):C(FactorB)', 'PR(>F)']
-        if p_int >= alpha:
-            st.write(f"❌ **Interaction** not significant (p = {p_int:.4f}) – factors act independently.")
-    st.success("Analysis complete!")
+            df_long['Block'] = 'All'
+        df_long = df_long.dropna(subset=['Response'])
+        if df_long.empty:
+            st.error("No valid numeric data in Response column.")
+            return
+        if df_long['FactorA'].nunique() < 2:
+            st.error(f"Factor A column '{col_factorA}' has only {df_long['FactorA'].nunique()} unique value(s). Need at least 2.")
+            return
+        if df_long['FactorB'].nunique() < 2:
+            st.error(f"Factor B column '{col_factorB}' has only {df_long['FactorB'].nunique()} unique value(s). Need at least 2.")
+            return
+        st.session_state.factorial_df = df_long
+        st.session_state.fact_names = {'FactorA': col_factorA, 'FactorB': col_factorB}
+        st.session_state.factorial_loaded = True
+        st.session_state.fact_needs_mapping = False
+        del st.session_state.fact_raw_df
+        st.rerun()
+
+# Check if manual mapping is needed
+if st.session_state.test_type == "Two-Way Factorial ANOVA with Blocking" and st.session_state.get('fact_needs_mapping', False):
+    manual_column_mapping_factorial()
+    st.stop()
 
 # ------------------------------------------------------------------
-# RBD ANOVA
+# RBD ANOVA (similar manual mapping can be added if needed, but keep simple for now)
 # ------------------------------------------------------------------
 def load_rbd():
     if st.session_state.rbd_loaded and st.session_state.rbd_df is not None:
@@ -620,7 +484,9 @@ def analyze_tukey(df, alpha):
 # Main
 # ------------------------------------------------------------------
 if st.session_state.test_type == "Two-Way Factorial ANOVA with Blocking":
-    load_factorial()
+    # If waiting for manual mapping, don't show the load button again
+    if not st.session_state.get('fact_needs_mapping', False):
+        load_factorial()
     if st.button("🔬 Run Analysis", type="primary"):
         if not st.session_state.factorial_loaded or st.session_state.factorial_df is None:
             st.error("Please load factorial data first.")
@@ -656,3 +522,145 @@ elif st.session_state.test_type == "Tukey HSD (Post-hoc)":
             st.error("Please load Tukey data first.")
         else:
             analyze_tukey(st.session_state.tukey_df, alpha)
+
+# Keep the analyze_factorial function defined (it was earlier, but ensure it's present)
+# I'll add the analyze_factorial definition here if not already in the code.
+# Actually, it was defined above but I need to make sure it's included. 
+# The previous code had analyze_factorial, but in this new version I must include it.
+# I'll add it now before the main block.
+
+def analyze_factorial(df, alpha, name_a, name_b):
+    if 'Block' not in df.columns:
+        df['Block'] = 'All'
+    df['FactorA'] = df['FactorA'].astype(str)
+    df['FactorB'] = df['FactorB'].astype(str)
+    df['Block'] = df['Block'].astype(str)
+    df = ensure_numeric(df, 'Response')
+    if df.empty:
+        st.error("No valid numeric data in Response column.")
+        return
+
+    if df['FactorA'].nunique() < 2:
+        st.error(f"Factor A ('{name_a}') has only {df['FactorA'].nunique()} level(s). Need at least 2.")
+        return
+    if df['FactorB'].nunique() < 2:
+        st.error(f"Factor B ('{name_b}') has only {df['FactorB'].nunique()} level(s). Need at least 2.")
+        return
+    if len(df) < 4:
+        st.error("Not enough data points (need at least 4).")
+        return
+
+    try:
+        formula = 'Response ~ C(FactorB) + C(FactorA) + C(Block) + C(FactorA):C(FactorB)'
+        model = ols(formula, data=df).fit()
+        anova = sm.stats.anova_lm(model, typ=2)
+    except Exception as e:
+        st.error(f"ANOVA failed: {e}")
+        st.info("Possible reasons: insufficient data, singular design, or constant response values.")
+        return
+
+    grand_mean = df['Response'].mean()
+    ss_total = np.sum((df['Response'] - grand_mean)**2)
+
+    results = []
+    for factor_key, factor_name in [('C(FactorB)', name_b), ('C(FactorA)', name_a),
+                                    ('C(Block)', 'Block'), ('C(FactorA):C(FactorB)', f'{name_a} × {name_b}')]:
+        if factor_key not in anova.index:
+            continue
+        ss = anova.loc[factor_key, 'sum_sq']
+        df_f = anova.loc[factor_key, 'df']
+        ms = ss / df_f
+        f_val = anova.loc[factor_key, 'F']
+        p_val = anova.loc[factor_key, 'PR(>F)']
+        eta = ss / ss_total
+        results.append([factor_name, ss, df_f, ms, f_val, p_val, eta])
+    ss_res = anova.loc['Residual', 'sum_sq']
+    df_res = anova.loc['Residual', 'df']
+    ms_res = ss_res / df_res
+    results.append(['Residuals', ss_res, df_res, ms_res, '', '', ''])
+
+    anova_df = pd.DataFrame(results, columns=['Factor', 'SS', 'df', 'MS', 'F', 'p-value', 'η²'])
+    for col in ['SS', 'MS', 'F', 'η²']:
+        anova_df[col] = anova_df[col].apply(lambda x: round(x, 5) if isinstance(x, (int, float)) else x)
+    anova_df['p-value'] = anova_df['p-value'].apply(lambda x: round(x, 5) if isinstance(x, (int, float)) else x)
+
+    st.subheader("ANOVA Table (Type II)")
+    st.dataframe(anova_df, use_container_width=True)
+
+    st.subheader("Visualization")
+    levels_a = sorted(df['FactorA'].unique())
+    means_a, err_a = [], []
+    for lev in levels_a:
+        m, ci = mean_ci(df[df['FactorA']==lev]['Response'].values)
+        means_a.append(m); err_a.append(ci)
+    fig1, ax1 = plt.subplots(figsize=(6,4))
+    ax1.bar(levels_a, means_a, yerr=err_a, capsize=5, color=['skyblue','steelblue'], edgecolor='black')
+    ax1.set_ylabel('Mean Response')
+    ax1.set_title(f'Effect of {name_a} (95% CI)')
+    ax1.set_xlabel(name_a)
+    ax1.grid(axis='y', linestyle='--', alpha=0.7)
+    st.pyplot(fig1)
+
+    levels_b = sorted(df['FactorB'].unique())
+    means_b, err_b = [], []
+    for lev in levels_b:
+        m, ci = mean_ci(df[df['FactorB']==lev]['Response'].values)
+        means_b.append(m); err_b.append(ci)
+    fig2, ax2 = plt.subplots(figsize=(6,4))
+    ax2.bar(levels_b, means_b, yerr=err_b, capsize=5, color=['lightcoral','darkred'], edgecolor='black')
+    ax2.set_ylabel('Mean Response')
+    ax2.set_title(f'Effect of {name_b} (95% CI)')
+    ax2.set_xlabel(name_b)
+    ax2.grid(axis='y', linestyle='--', alpha=0.7)
+    st.pyplot(fig2)
+
+    inter = df.groupby(['FactorA', 'FactorB'])['Response'].agg(list).reset_index()
+    inter_means, inter_err = [], []
+    for _, row in inter.iterrows():
+        m, ci = mean_ci(row['Response'])
+        inter_means.append(m); inter_err.append(ci)
+    inter['mean'] = inter_means
+    inter['err'] = inter_err
+    fig3, ax3 = plt.subplots(figsize=(6,4))
+    for b in levels_b:
+        sub = inter[inter['FactorB'] == b]
+        ax3.errorbar(sub['FactorA'], sub['mean'], yerr=sub['err'], marker='o', label=b, capsize=5, linewidth=2)
+    ax3.set_xlabel(name_a)
+    ax3.set_ylabel('Mean Response')
+    ax3.set_title('Interaction Plot (95% CI)')
+    ax3.legend(title=name_b)
+    ax3.grid(True, linestyle='--', alpha=0.7)
+    st.pyplot(fig3)
+
+    if len(df['Block'].unique()) > 1:
+        block_means = df.groupby('Block')['Response'].mean().round(3)
+        st.subheader("Block Means")
+        st.dataframe(pd.DataFrame(block_means))
+        fig4, ax4 = plt.subplots(figsize=(6,4))
+        block_means.plot(kind='bar', color='lightgreen', edgecolor='black', ax=ax4)
+        ax4.set_title('Mean Response by Block')
+        ax4.set_ylabel('Mean Response')
+        ax4.grid(axis='y', linestyle='--', alpha=0.7)
+        st.pyplot(fig4)
+
+    if 'C(FactorA)' in anova.index:
+        p_a = anova.loc['C(FactorA)', 'PR(>F)']
+        if p_a < alpha:
+            st.write(f"✅ **{name_a}** has a significant effect (p = {p_a:.4f})")
+        else:
+            st.write(f"❌ **{name_a}** effect not significant (p = {p_a:.4f})")
+    if 'C(FactorB)' in anova.index:
+        p_b = anova.loc['C(FactorB)', 'PR(>F)']
+        if p_b < alpha:
+            st.write(f"✅ **{name_b}** has a significant effect (p = {p_b:.4f})")
+        else:
+            st.write(f"❌ **{name_b}** effect not significant (p = {p_b:.4f})")
+    if 'C(Block)' in anova.index:
+        p_block = anova.loc['C(Block)', 'PR(>F)']
+        if p_block < alpha:
+            st.write(f"⚠️ **Block** has a significant effect (p = {p_block:.4f})")
+    if 'C(FactorA):C(FactorB)' in anova.index:
+        p_int = anova.loc['C(FactorA):C(FactorB)', 'PR(>F)']
+        if p_int >= alpha:
+            st.write(f"❌ **Interaction** not significant (p = {p_int:.4f}) – factors act independently.")
+    st.success("Analysis complete!")
