@@ -45,6 +45,21 @@ if 'fact_names' not in st.session_state:
     st.session_state.fact_names = None
 if 'fact_needs_mapping' not in st.session_state:
     st.session_state.fact_needs_mapping = False
+# For manual entry dimensions
+if 'dim_applied' not in st.session_state:
+    st.session_state.dim_applied = False
+if 'levels_a' not in st.session_state:
+    st.session_state.levels_a = 2
+if 'levels_b' not in st.session_state:
+    st.session_state.levels_b = 2
+if 'blocks' not in st.session_state:
+    st.session_state.blocks = 2
+if 'has_block' not in st.session_state:
+    st.session_state.has_block = True
+if 'name_a' not in st.session_state:
+    st.session_state.name_a = "Factor A"
+if 'name_b' not in st.session_state:
+    st.session_state.name_b = "Factor B"
 
 # ==================================================================
 # Helper functions
@@ -63,7 +78,7 @@ def ensure_numeric(df, col='Response'):
     return df.dropna(subset=[col])
 
 # ==================================================================
-# Factorial ANOVA analysis function (must be defined before use)
+# Factorial ANOVA analysis function
 # ==================================================================
 def analyze_factorial(df, alpha, name_a, name_b):
     if 'Block' not in df.columns:
@@ -220,7 +235,6 @@ def manual_column_mapping_factorial():
         if col_factorA == col_factorB or col_factorA == col_response or col_factorB == col_response:
             st.error("Please select distinct columns for Factor A, Factor B, and Response.")
             return
-        # Build long format dataframe
         df_long = pd.DataFrame({
             'FactorA': df_raw[col_factorA].astype(str),
             'FactorB': df_raw[col_factorB].astype(str),
@@ -254,50 +268,99 @@ def load_factorial():
 
     if data_source == "✏️ Manual entry":
         st.subheader("Manual Entry for Factorial ANOVA")
-        with st.form(key="fact_manual"):
-            col1, col2 = st.columns(2)
-            with col1:
-                name_a = st.text_input("Name of Factor A (e.g., 'Cutting Speed'):", value="Factor A")
-                levels_a = st.number_input("Levels of Factor A", min_value=2, max_value=5, value=2)
-            with col2:
-                name_b = st.text_input("Name of Factor B (e.g., 'Coolant'):", value="Factor B")
-                levels_b = st.number_input("Levels of Factor B", min_value=2, max_value=5, value=2)
-            has_block = st.checkbox("Include Block factor?", value=True)
+        
+        # Dimension controls (outside the main form)
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            name_a = st.text_input("Name of Factor A (e.g., 'Cutting Speed'):", value="Factor A", key="fact_name_a")
+            levels_a = st.number_input("Levels of Factor A", min_value=2, max_value=10, value=2, key="levels_a_input")
+        with col2:
+            name_b = st.text_input("Name of Factor B (e.g., 'Coolant'):", value="Factor B", key="fact_name_b")
+            levels_b = st.number_input("Levels of Factor B", min_value=2, max_value=10, value=2, key="levels_b_input")
+        with col3:
+            has_block = st.checkbox("Include Block factor?", value=True, key="has_block_input")
             if has_block:
-                blocks = st.number_input("Number of blocks", min_value=2, max_value=5, value=2)
+                blocks = st.number_input("Number of blocks", min_value=2, max_value=10, value=2, key="blocks_input")
             else:
                 blocks = 1
-            levels_a_vals = [st.text_input(f"{name_a} level {i+1}", value=f"L{i+1}", key=f"fa_{i}") for i in range(int(levels_a))]
-            levels_b_vals = [st.text_input(f"{name_b} level {j+1}", value=f"L{j+1}", key=f"fb_{j}") for j in range(int(levels_b))]
-            if has_block:
-                block_names = [st.text_input(f"Block {k+1}", value=f"B{k+1}", key=f"fk_{k}") for k in range(int(blocks))]
-            else:
-                block_names = ['All']
-                blocks = 1
-            rows = []
-            for k in range(int(blocks)):
+        
+        # Apply dimensions button
+        if st.button("Apply dimensions", key="apply_dim"):
+            st.session_state.dim_applied = True
+            st.session_state.levels_a = int(levels_a)
+            st.session_state.levels_b = int(levels_b)
+            st.session_state.blocks = int(blocks)
+            st.session_state.has_block = has_block
+            st.session_state.name_a = name_a
+            st.session_state.name_b = name_b
+            st.rerun()
+        
+        # If dimensions have been applied, show the data entry form
+        if st.session_state.get('dim_applied', False):
+            with st.form(key="fact_manual_data"):
+                levels_a = st.session_state.levels_a
+                levels_b = st.session_state.levels_b
+                blocks = st.session_state.blocks
+                has_block = st.session_state.has_block
+                name_a = st.session_state.name_a
+                name_b = st.session_state.name_b
+                
+                levels_a_vals = []
+                st.write(f"**{name_a} levels:**")
+                cols_a = st.columns(levels_a)
+                for i in range(levels_a):
+                    with cols_a[i]:
+                        val = st.text_input(f"Level {i+1}", value=f"L{i+1}", key=f"fa_{i}")
+                        levels_a_vals.append(val)
+                
+                levels_b_vals = []
+                st.write(f"**{name_b} levels:**")
+                cols_b = st.columns(levels_b)
+                for j in range(levels_b):
+                    with cols_b[j]:
+                        val = st.text_input(f"Level {j+1}", value=f"L{j+1}", key=f"fb_{j}")
+                        levels_b_vals.append(val)
+                
                 if has_block:
-                    st.write(f"**{block_names[k]}**")
-                for i in range(int(levels_a)):
-                    for j in range(int(levels_b)):
-                        val = st.number_input(f"{levels_a_vals[i]} × {levels_b_vals[j]}", value=10.0, key=f"fact_man_{k}_{i}_{j}", step=0.1)
-                        row = {'FactorA': levels_a_vals[i], 'FactorB': levels_b_vals[j], 'Response': val}
-                        if has_block:
-                            row['Block'] = block_names[k]
-                        else:
-                            row['Block'] = 'All'
-                        rows.append(row)
-            submitted = st.form_submit_button("✅ Save Data")
-            if submitted:
-                df = pd.DataFrame(rows)
-                df = ensure_numeric(df, 'Response')
-                if df.empty:
-                    st.error("No valid numeric data. Please enter numbers.")
+                    block_names = []
+                    st.write("**Block names:**")
+                    cols_block = st.columns(blocks)
+                    for k in range(blocks):
+                        with cols_block[k]:
+                            name = st.text_input(f"Block {k+1}", value=f"B{k+1}", key=f"fk_{k}")
+                            block_names.append(name)
                 else:
-                    st.session_state.factorial_df = df
-                    st.session_state.fact_names = {'FactorA': name_a, 'FactorB': name_b}
-                    st.session_state.factorial_loaded = True
-                    st.rerun()
+                    block_names = ['All']
+                    blocks = 1
+                
+                rows = []
+                for k in range(blocks):
+                    if has_block:
+                        st.write(f"**{block_names[k]}**")
+                    for i in range(levels_a):
+                        for j in range(levels_b):
+                            val = st.number_input(f"{levels_a_vals[i]} × {levels_b_vals[j]}", value=10.0, key=f"fact_man_{k}_{i}_{j}", step=0.1)
+                            row = {'FactorA': levels_a_vals[i], 'FactorB': levels_b_vals[j], 'Response': val}
+                            if has_block:
+                                row['Block'] = block_names[k]
+                            else:
+                                row['Block'] = 'All'
+                            rows.append(row)
+                
+                submitted = st.form_submit_button("✅ Save Data")
+                if submitted:
+                    df = pd.DataFrame(rows)
+                    df = ensure_numeric(df, 'Response')
+                    if df.empty:
+                        st.error("No valid numeric data. Please enter numbers.")
+                    else:
+                        st.session_state.factorial_df = df
+                        st.session_state.fact_names = {'FactorA': name_a, 'FactorB': name_b}
+                        st.session_state.factorial_loaded = True
+                        st.session_state.dim_applied = False
+                        st.rerun()
+        else:
+            st.info("Click 'Apply dimensions' to set up the data entry grid.")
         return
     else:  # Upload file
         st.subheader("Upload Factorial Data")
@@ -579,7 +642,7 @@ with st.sidebar:
     )
     if new_test_type != st.session_state.test_type:
         st.session_state.test_type = new_test_type
-        # Reset loaded flag for new test
+        # Reset loaded flags
         if new_test_type == "Two-Way Factorial ANOVA with Blocking":
             st.session_state.factorial_loaded = False
         elif new_test_type == "ANOVA (F-test) - RBD":
@@ -609,7 +672,7 @@ with st.sidebar:
         st.rerun()
 
 # ==================================================================
-# Main logic: load data and run analysis
+# Main logic
 # ==================================================================
 # First, handle manual mapping if needed
 if st.session_state.test_type == "Two-Way Factorial ANOVA with Blocking" and st.session_state.get('fact_needs_mapping', False):
